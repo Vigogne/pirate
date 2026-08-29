@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>海盗湾 · 3v3 海战 MOBA</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div id="frame">
+    <canvas id="game"></canvas>
+
+    <!-- HUD -->
+    <div id="hud" class="hidden">
+      <div class="hud-left">
+        <div class="hud-item" id="hud-base" title="我方基地耐久">
+          <span class="hud-label">🛡️ 我方基地</span>
+          <div class="bar"><div class="bar-fill base" id="base-bar"></div></div>
+          <span class="hud-num" id="base-num">0</span>
+        </div>
+        <div class="hud-item" id="hud-ship" title="旗舰号耐久">
+          <span class="hud-label">⛵ 旗舰号</span>
+          <div class="bar"><div class="bar-fill ship" id="ship-bar"></div></div>
+          <span class="hud-num" id="ship-num">0</span>
+        </div>
+      </div>
+
+      <div class="hud-center">
+        <div class="wave-badge" id="wave-badge">3v3 海战</div>
+        <div class="bounty" id="bounty">💰 0</div>
+        <div class="score" id="score">击杀 0 · 0:00</div>
+      </div>
+
+      <div class="hud-right">
+        <div class="hud-item" id="hud-ebase" title="敌方基地耐久">
+          <span class="hud-label">🏴‍☠️ 敌方基地</span>
+          <div class="bar"><div class="bar-fill ebase" id="ebase-bar"></div></div>
+          <span class="hud-num" id="ebase-num">0</span>
+        </div>
+        <button id="btn-open-menu" class="hud-btn" title="装备 / 升级（P）">⚙️ 装备</button>
+        <button id="btn-repair" class="hud-btn" title="修理旗舰号">🔧 修船</button>
+        <button id="btn-range" class="hud-btn" title="显示/隐藏武器射程">🎯 射程</button>
+        <button id="btn-pause" class="hud-btn" title="暂停/继续（空格）">⏸ 暂停</button>
+        <button id="btn-mute" class="hud-btn" title="音效开关（M）">🔊</button>
+      </div>
+    </div>
+
+    <!-- 底部装备坞：四个炮位 + 模块升级 + 作弊选项 -->
+    <div id="dock" class="hidden">
+      <div class="dock-title">船坞 · 装备与升级</div>
+      <div class="dock-content">
+        <div class="slots" id="slots"></div>
+        <div class="modules">
+          <div class="module" id="mod-hull"></div>
+          <div class="module" id="mod-sail"></div>
+          <div class="module" id="mod-armor"></div>
+        </div>
+      </div>
+      <div class="cheat-row">
+        <span class="cheat-label">作弊选项</span>
+        <button id="btn-cheat" class="cheat-btn">💰 作弊刷钱 +1500（C）</button>
+        <button id="btn-cheat-auto" class="cheat-btn">自动刷钱：关</button>
+      </div>
+    </div>
+
+    <!-- 右侧战报栏（可折叠）：各船击杀/死亡/状态/复活/经济 -->
+    <div id="roster" class="">
+      <button id="roster-toggle" class="roster-toggle" title="展开/收起战报">📋 战报 ▾</button>
+      <div class="roster-body" id="roster-body"></div>
+    </div>
+
+    <!-- 武器选择弹窗 -->
+    <div id="picker" class="hidden">      <div class="picker-panel">
+        <div class="picker-head">
+          <span id="picker-title">选择武器</span>
+          <button id="picker-close" class="close-btn">✕</button>
+        </div>
+        <div class="picker-grid" id="picker-grid"></div>
+      </div>
+    </div>
+
+    <!-- 提示条 -->
+    <div id="toast" class="hidden"></div>
+
+    <!-- 击杀英雄播报 -->
+    <div id="announce"></div>
+
+    <!-- 开始 / 结束 覆盖层 -->
+    <div id="menu" class="overlay">
+      <div class="panel">
+        <div class="panel-title">海盗湾 · 3v3 海战</div>
+        <p class="panel-sub">
+          上下两座基地各自动生产<span>护航舰</span>进攻对面，每方还有 <b>一塔 / 二塔</b>防御塔
+          —— <b>塔不拆光，基地免伤</b>！<br/>
+          双方各有 <b>3 艘英雄战船</b>（我方：旗舰号由你操控 + 2 名 AI 队友），
+          英雄会自主打怪赚钱、升级自己的武器与模块。<br/>
+          地图是一张 4 屏高的大海图，陆地岛群分割战场，船会被陆地阻挡。<br/>
+          <b>方向键 / WASD</b> 航行（船自动转向） · <b>CTRL</b> 查看武器射程 · <b>SPACE</b> 暂停 ·
+          <b>P</b> 船坞 · <b>C</b> 作弊刷钱
+        </p>
+        <div class="controls-row">
+          <span>🧭 方向键移动</span><span>🎯 武器自动开火</span><span>🤖 队友自动强化</span><span>🗺️ 4 屏大海图</span>
+        </div>
+        <p class="panel-sub" style="font-size:12px;opacity:.75">
+          📱 手机版：在画面上<b>按住拖动即为摇杆</b>；右上角按钮：装备 / 修船 / 🎯射程 / ⏸暂停 / 静音。建议横屏玩耍。
+        </p>
+        <button class="big-btn" id="btn-start">起 航</button>
+      </div>
+    </div>
+
+    <div id="gameover" class="overlay hidden">
+      <div class="panel">
+        <div class="panel-title">基地沦陷</div>
+        <p class="panel-sub" id="go-text">海怪踏平了船坞……</p>
+        <div class="final-stats" id="go-stats"></div>
+        <button class="big-btn" id="btn-restart">再接再厉</button>
+      </div>
+    </div>
+
+    <div id="victory" class="overlay hidden">
+      <div class="panel">
+        <div class="panel-title victory-title">摧毁成功！</div>
+        <p class="panel-sub">敌方基地化为火海，海盗们载歌载舞。</p>
+        <div class="final-stats" id="victory-stats"></div>
+        <button class="big-btn" id="btn-playagain">再战一局</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 渲染与逻辑（普通脚本，按依赖顺序加载；data 与代码分离便于修改） -->
+  <script src="js/utils.js"></script>
+  <script src="js/config.js"></script>
+  <script src="js/audio.js"></script>
+  <script src="js/input.js"></script>
+  <script src="js/water.js"></script>
+  <script src="js/map.js"></script>
+  <script src="js/effects.js"></script>
+  <script src="js/projectile.js"></script>
+  <script src="js/minion.js"></script>
+  <script src="js/tower.js"></script>
+  <script src="js/ship.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/game.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
