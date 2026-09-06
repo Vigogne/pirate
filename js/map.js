@@ -8,73 +8,285 @@ const Map = {
   draw(ctx, game) {
     const W = WORLD.w, H = WORLD.h;
 
-    // 陆地岛群（数据与碰撞同一来源 LAND；基地岛另有绘制）
+    // 陆地岛群（优先像素精灵：4 种自然海岛轮换 + 独立椰树叠加，中心锚点）
+    const ISLAND_IDS = ['island_0', 'island_1', 'island_2', 'island_3'];
+    let li = 0;
     for (const l of LAND) {
       if (l.base) continue;
+      const id = ISLAND_IDS[li % 4]; li++;
+      if (Assets.has(id)) {
+        Assets.draw(ctx, id, l.x, l.y, l.rx / 96, 0, l.ry / 96);
+        // 椰树独立叠加（不随岛形拉伸变形）；树冠摇摆由贴图倾斜模拟
+        const pn = l.rx >= 95 ? 3 : 2;
+        for (let i = 0; i < pn; i++) {
+          const a = (i / pn) * TAU + li * 1.9 + i * 0.6;
+          const px = l.x + Math.cos(a) * l.rx * 0.58;
+          const py = l.y + Math.sin(a) * l.ry * 0.58;
+          const s = 0.85 + ((i * 7 + li * 3) % 4) * 0.07;
+          Assets.draw(ctx, 'palm', px, py - 30 * s, s, ((i + li) % 3 - 1) * 0.08);
+        }
+        continue;
+      }
       this._island(ctx, l);
     }
 
-    // 双方基地岛（含船坞与椰子树）
-    for (const base of game.bases) {
-      this._baseIsland(ctx, game, base);
+    // 双方基地岛（优先像素精灵 base_0/base_1，含码头/吊机/椰树）
+    if (Assets.has('base_0')) {
+      for (const base of game.bases) {
+        Assets.draw(ctx, 'base_' + base.team, base.x, base.y, 178 / 160, 0, 130 / 102);
+        const bw = 150, bh = 10;
+        const by = base.y + 92;   // 血条放在栈桥一侧，避开旗杆
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        roundRect(ctx, base.x - bw / 2, by, bw, bh, 4); ctx.fill();
+        ctx.fillStyle = TEAM[base.team].color;
+        roundRect(ctx, base.x - bw / 2, by, bw * clamp(base.hp / base.maxHp, 0, 1), bh, 4); ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.lineWidth = 1;
+        roundRect(ctx, base.x - bw / 2, by, bw, bh, 4); ctx.stroke();
+      }
+    } else {
+      for (const base of game.bases) {
+        this._baseIsland(ctx, game, base);
+      }
+    }
+
+    // 野区海兽巢穴（优先像素精灵）
+    for (const m of game.monsters) {
+      if (m.lair === 'grotto') {
+        if (Assets.has('lair_grotto')) Assets.draw(ctx, 'lair_grotto', m.homeX, m.homeY, 1, 0);
+        else this._lairGrotto(ctx, m.homeX, m.homeY);
+      } else if (m.lair === 'wreck') {
+        if (Assets.has('lair_wreck')) Assets.draw(ctx, 'lair_wreck', m.homeX, m.homeY, 1, 0);
+        else this._lairWreck(ctx, m.homeX, m.homeY);
+      }
     }
   },
 
-  // 大中型陆地岛（沙滩 + 椰树 + 草）
+  /* 章鱼巢：礁石溶洞——墨紫泻湖 + 环礁石（留巢口）+ 螺旋巨壳 + 气泡与旋涡 */
+  _lairGrotto(ctx, x, y) {
+    const t = this.t;
+    ctx.save();
+    // 墨紫泻湖（自然轮廓 + 柔光）
+    const g = ctx.createRadialGradient(x, y, 10, x, y, 120);
+    g.addColorStop(0, 'rgba(70,30,110,0.5)');
+    g.addColorStop(0.7, 'rgba(50,25,90,0.28)');
+    g.addColorStop(1, 'rgba(50,25,90,0)');
+    ctx.fillStyle = g;
+    this._coast(ctx, x, y, 130, 88, 71, 36); ctx.fill();
+    // 旋涡（圆环虚线）
+    ctx.globalAlpha = 0.35;
+    ctx.strokeStyle = '#c9a4ff';
+    ctx.lineWidth = 2;
+    ctx.setLineDash([14, 10]);
+    ctx.lineDashOffset = -t * 30;
+    for (let r = 30; r <= 66; r += 18) {
+      ctx.beginPath(); ctx.ellipse(x, y, r, r * 0.72, 0, 0, TAU); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+    // 礁石环（不规则摆石，东南留巢口）
+    for (let i = 0; i < 11; i++) {
+      const a = (i / 11) * TAU - 0.4;
+      if (Math.abs(a - 0.9) < 0.5) continue;
+      const rr = 74 + (i % 3) * 10;
+      const px = x + Math.cos(a) * rr, py = y + Math.sin(a) * rr * 0.72;
+      this._coast(ctx, px, py, 11 + (i % 4) * 4, 9 + ((i * 7) % 6), i * 13 + 5, 10);
+      ctx.fillStyle = i % 2 ? '#4a5560' : '#39424c'; ctx.fill();
+      ctx.strokeStyle = '#232a31'; ctx.lineWidth = 1.6; ctx.stroke();
+    }
+    // 螺旋巨壳（圆形螺旋纹）
+    ctx.save();
+    ctx.translate(x + 62, y + 34);
+    ctx.rotate(-0.5);
+    ctx.fillStyle = '#e8bfa0';
+    ctx.beginPath(); ctx.arc(0, 0, 13, 0, TAU); ctx.fill();
+    ctx.strokeStyle = '#a87858'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i <= 40; i++) {
+      const a2 = i / 40 * TAU * 2.4;
+      const r2 = 1.5 + i / 40 * 10.5;
+      const px2 = Math.cos(a2) * r2, py2 = Math.sin(a2) * r2;
+      if (i === 0) ctx.moveTo(px2, py2); else ctx.lineTo(px2, py2);
+    }
+    ctx.stroke();
+    ctx.restore();
+    // 上涌气泡（圆形）
+    for (let i = 0; i < 10; i++) {
+      const seed = i * 37.7;
+      const bx = x + (Math.sin(seed) * 0.5) * 130;
+      const life = sin01(t * 0.7 + seed);
+      const by = y + 40 - life * 70;
+      ctx.globalAlpha = (1 - life) * 0.5;
+      ctx.fillStyle = '#d9c2ff';
+      const bs = 1.5 + (seed % 3);
+      ctx.beginPath(); ctx.arc(bx, by, bs, 0, TAU); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  },
+
+  /* 鲨鱼巢：礁滩沉船——沙洲 + 断成两截的船体 + 斜桅破帆 + 白骨与水纹 */
+  _lairWreck(ctx, x, y) {
+    const t = this.t;
+    ctx.save();
+    // 血红藻晕（淡红柔光）
+    const g = ctx.createRadialGradient(x, y, 10, x, y, 120);
+    g.addColorStop(0, 'rgba(150,40,40,0.30)');
+    g.addColorStop(0.7, 'rgba(110,35,45,0.16)');
+    g.addColorStop(1, 'rgba(110,35,45,0)');
+    ctx.fillStyle = g;
+    this._coast(ctx, x, y, 130, 88, 19, 36); ctx.fill();
+    // 沙洲（自然轮廓）
+    this._coast(ctx, x, y, 118, 80, 23, 40);
+    ctx.fillStyle = '#dcc08a'; ctx.fill();
+    ctx.strokeStyle = 'rgba(150,110,60,0.5)'; ctx.lineWidth = 1.6; ctx.stroke();
+    // 沉船前半段（翘起）
+    ctx.save();
+    ctx.translate(x - 40, y - 16);
+    ctx.rotate(0.5);
+    ctx.fillStyle = '#4a3524';
+    ctx.beginPath();
+    ctx.moveTo(-52, -14); ctx.lineTo(52, 10); ctx.lineTo(44, 26); ctx.lineTo(-56, 8);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = '#2c1e12'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.strokeStyle = 'rgba(230,210,170,0.5)'; ctx.lineWidth = 1.4;
+    for (let i = -3; i <= 2; i++) {
+      ctx.beginPath(); ctx.moveTo(i * 12 - 8, -8); ctx.lineTo(i * 12, 6); ctx.lineTo(i * 12 + 8, -8); ctx.stroke();
+    }
+    ctx.restore();
+    // 沉船后半段（下沉）
+    ctx.save();
+    ctx.translate(x + 46, y + 26);
+    ctx.rotate(-0.8);
+    ctx.fillStyle = '#3e2c1e';
+    ctx.beginPath();
+    ctx.moveTo(-40, -8); ctx.lineTo(44, 14); ctx.lineTo(36, 30); ctx.lineTo(-44, 12);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = '#26180e'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.restore();
+    // 斜桅 + 破帆
+    ctx.save();
+    ctx.translate(x - 10, y - 8);
+    ctx.rotate(-0.35 + Math.sin(t * 0.6) * 0.02);
+    ctx.strokeStyle = '#2c1e12'; ctx.lineWidth = 4; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -74); ctx.stroke();
+    const flap = Math.sin(t * 1.6) * 5;
+    ctx.fillStyle = 'rgba(210,195,160,0.75)';
+    ctx.beginPath();
+    ctx.moveTo(0, -70);
+    ctx.quadraticCurveTo(26 + flap, -52, 24 + flap, -26);
+    ctx.lineTo(4, -34);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = 'rgba(90,70,45,0.6)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(4, -52); ctx.lineTo(3, -30); ctx.stroke();
+    ctx.restore();
+    // 白骨（骨棒 + 圆形骨节）
+    ctx.strokeStyle = 'rgba(235,225,200,0.65)'; ctx.lineWidth = 2;
+    for (let i = 0; i < 5; i++) {
+      const seed = i * 61.3;
+      const bx = x + (Math.sin(seed) * 0.5) * 100;
+      const by = y + (Math.cos(seed * 1.7) * 0.4) * 56;
+      const a = seed * 0.7;
+      ctx.beginPath();
+      ctx.moveTo(bx - Math.cos(a) * 7, by - Math.sin(a) * 7);
+      ctx.lineTo(bx + Math.cos(a) * 7, by + Math.sin(a) * 7);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(235,225,200,0.8)';
+      ctx.beginPath();
+      ctx.arc(bx + Math.cos(a) * 6, by + Math.sin(a) * 6, 2, 0, TAU);
+      ctx.arc(bx - Math.cos(a) * 6, by - Math.sin(a) * 6, 2, 0, TAU);
+      ctx.fill();
+    }
+    // 水纹涟漪（椭圆环）
+    ctx.globalAlpha = 0.4;
+    ctx.strokeStyle = '#ffb0a0';
+    ctx.lineWidth = 1.6;
+    for (let i = 0; i < 3; i++) {
+      const ph = sin01(t * 0.8 + i * 0.33);
+      const rr = 30 + ph * 44;
+      ctx.beginPath(); ctx.ellipse(x, y, rr, rr * 0.6, 0, 0, TAU); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  },
+
+  // 有机海岸路径（谐波叠加 → 自然的不规则岛形）
+  _coast(ctx, x, y, rx, ry, seed, n = 40) {
+    const a1 = 0.10 + (seed % 5) * 0.012, p1 = (seed % 7) * 0.9;
+    const a2 = 0.05 + (seed % 3) * 0.015, p2 = (seed % 11) * 0.7;
+    ctx.beginPath();
+    for (let i = 0; i <= n; i++) {
+      const t = (i % n) / n * TAU;
+      const w = 1 + a1 * Math.sin(t * 2 + p1) + a2 * Math.sin(t * 5 + p2);
+      const px = x + Math.cos(t) * rx * w;
+      const py = y + Math.sin(t) * ry * w;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+  },
+
+  // 大中型陆地岛（自然轮廓：窄边沙滩 + 草甸主体 + 椰树）
   _island(ctx, l) {
     const x = l.x, y = l.y, rx = l.rx, ry = l.ry;
     const big = rx >= 90;
+    const seed = ((l.x * 7 + l.y * 13) | 0) % 97;
 
-    // 浅滩光晕
-    const halo = ctx.createRadialGradient(x, y, Math.min(rx, ry) * 0.4, x, y, Math.max(rx, ry) * 1.25);
-    halo.addColorStop(0, 'rgba(140,220,200,0.25)');
-    halo.addColorStop(1, 'rgba(140,220,200,0)');
-    ctx.fillStyle = halo;
-    ctx.beginPath(); ctx.ellipse(x, y, rx * 1.3, ry * 1.3, 0, 0, TAU); ctx.fill();
+    // 浅滩光晕（半透明柔光）
+    ctx.save();
+    this._coast(ctx, x, y, rx * 1.22, ry * 1.22, seed + 31, 44);
+    ctx.fillStyle = 'rgba(140,220,200,0.22)'; ctx.fill();
+    // 湿沙 → 窄边沙滩 → 草甸
+    this._coast(ctx, x, y, rx * 0.99, ry * 0.99, seed + 1, 52);
+    ctx.fillStyle = '#c8a568'; ctx.fill();
+    this._coast(ctx, x, y, rx * 0.955, ry * 0.955, seed, 52);
+    ctx.fillStyle = '#ecd795'; ctx.fill();
+    ctx.strokeStyle = 'rgba(150,110,60,0.55)'; ctx.lineWidth = 1.6;
+    ctx.stroke();
+    this._coast(ctx, x, y, rx * 0.845, ry * 0.845, seed + 5, 52);
+    ctx.fillStyle = '#3f8f52'; ctx.fill();
+    ctx.strokeStyle = 'rgba(40,102,58,0.8)'; ctx.lineWidth = 1.4;
+    ctx.stroke();
+    // 草甸明暗
+    this._coast(ctx, x - rx * 0.1, y - ry * 0.12, rx * 0.36, ry * 0.34, seed + 9, 30);
+    ctx.fillStyle = 'rgba(85,167,102,0.7)'; ctx.fill();
+    this._coast(ctx, x + rx * 0.22, y + ry * 0.16, rx * 0.3, ry * 0.28, seed + 13, 26);
+    ctx.fillStyle = 'rgba(47,122,66,0.8)'; ctx.fill();
+    ctx.restore();
 
-    // 沙滩主体
-    const sand = ctx.createRadialGradient(x, y, 8, x, y, Math.max(rx, ry));
-    sand.addColorStop(0, big ? '#edd58f' : '#efd99f');
-    sand.addColorStop(0.75, '#d9b878');
-    sand.addColorStop(1, 'rgba(205,170,105,0.55)');
-    ctx.fillStyle = sand;
-    ctx.beginPath(); ctx.ellipse(x, y, rx, ry, 0, 0, TAU); ctx.fill();
-
-    // 岸线泡沫（波动）
+    // 岸线泡沫（沿岸抖动细线）
+    ctx.save();
     ctx.strokeStyle = 'rgba(255,255,255,0.4)';
     ctx.lineWidth = 2.2;
     ctx.beginPath();
-    for (let a = 0; a <= TAU + 0.1; a += 0.1) {
-      const wob = Math.sin(a * 5 + this.t * 2) * 3;
+    for (let a = 0; a <= TAU + 0.1; a += 0.16) {
+      const wob = (Math.sin(a * 5 + this.t * 1.8) * 0.5 + 0.5) * 3.2;
       const px = x + Math.cos(a) * (rx + wob);
       const py = y + Math.sin(a) * (ry + wob);
       if (a === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
     }
     ctx.stroke();
+    ctx.restore();
 
-    // 内部草甸
-    ctx.fillStyle = 'rgba(86,158,96,0.5)';
-    ctx.beginPath(); ctx.ellipse(x, y, rx * 0.5, ry * 0.52, 0, 0, TAU); ctx.fill();
-    // 草叶
-    ctx.strokeStyle = 'rgba(60,120,60,0.7)';
+    // 草叶（折线）+ 小花
+    ctx.strokeStyle = 'rgba(44,110,58,0.8)';
     ctx.lineWidth = 1.2;
     const gn = big ? 10 : 5;
     for (let i = 0; i < gn; i++) {
-      const gg = i * 2.39 + l.x;
-      const gx = x + (Math.sin(gg) * 0.42) * rx;
-      const gy = y + (Math.cos(gg * 1.3) * 0.4) * ry;
+      const gg = i * 2.39 + seed;
+      const gx = x + (Math.sin(gg) * 0.4) * rx;
+      const gy = y + (Math.cos(gg * 1.3) * 0.38) * ry;
       ctx.beginPath();
       ctx.moveTo(gx, gy);
-      ctx.quadraticCurveTo(gx + 2, gy - 7, gx + 3, gy - 11 - Math.sin(this.t * 1.6 + i) * 1.5);
+      ctx.lineTo(gx + 1.5, gy - 6);
+      ctx.lineTo(gx + 3, gy - 11 - (Math.sin(this.t * 1.6 + i + 3) * 0.5 + 0.5) * 3);
       ctx.stroke();
     }
 
-    // 椰子树（大岛上）
+    // 椰子树（大岛上更多）
     const pn = big ? 4 : 2;
     for (let i = 0; i < pn; i++) {
-      const a = (i / pn) * TAU + l.x;
-      const px = x + Math.cos(a) * rx * 0.66;
-      const py = y + Math.sin(a) * ry * 0.62;
+      const a = (i / pn) * TAU + seed;
+      const px = x + Math.cos(a) * rx * 0.62;
+      const py = y + Math.sin(a) * ry * 0.6;
       this._palm(ctx, px, py, 0.85 + (i % 2) * 0.18);
     }
   },
@@ -84,40 +296,42 @@ const Map = {
     const x = base.x, y = base.y;
     const top = base.team === 1;               // 敌方基地在上方
     const R = 150;                              // 岛屿半径
+    const seed = ((x * 11 + y * 17) | 0) % 97;
 
-    // 沙滩椭圆
-    const sand = ctx.createRadialGradient(x, y, 20, x, y, R);
-    sand.addColorStop(0, '#efd9a0');
-    sand.addColorStop(0.8, '#d8b878');
-    sand.addColorStop(1, 'rgba(210,175,110,0.0)');
-    ctx.fillStyle = sand;
-    ctx.beginPath(); ctx.ellipse(x, y, R * 1.18, R * 0.86, 0, 0, TAU); ctx.fill();
+    // 自然岛形：浅滩 → 窄边沙滩 → 草甸
+    ctx.save();
+    this._coast(ctx, x, y, R * 1.2, R * 0.82, seed + 31, 40);
+    ctx.fillStyle = 'rgba(140,220,200,0.22)'; ctx.fill();
+    this._coast(ctx, x, y, R * 1.0, R * 0.68, seed + 1, 44);
+    ctx.fillStyle = '#c8a568'; ctx.fill();
+    this._coast(ctx, x, y, R * 0.96, R * 0.65, seed, 44);
+    ctx.fillStyle = '#ecd795'; ctx.fill();
+    ctx.strokeStyle = 'rgba(150,110,60,0.55)'; ctx.lineWidth = 1.6; ctx.stroke();
+    this._coast(ctx, x, y, R * 0.84, R * 0.57, seed + 5, 44);
+    ctx.fillStyle = '#3f8f52'; ctx.fill();
+    ctx.strokeStyle = 'rgba(40,102,58,0.8)'; ctx.lineWidth = 1.4; ctx.stroke();
+    ctx.restore();
 
-    // 沙滩波纹
-    ctx.strokeStyle = 'rgba(180,140,80,0.35)';
-    ctx.lineWidth = 1.4;
-    for (let i = -1; i <= 1; i++) {
-      ctx.beginPath(); ctx.ellipse(x, y, R * (0.78 + i * 0.1), R * 0.58 * (0.78 + i * 0.1), 0, 0, TAU); ctx.stroke();
-    }
-
-    // 岸线泡沫（环岛）
+    // 岸线泡沫（沿岸抖动细线）
+    ctx.save();
     ctx.strokeStyle = 'rgba(255,255,255,0.35)';
     ctx.lineWidth = 2.4;
     ctx.beginPath();
-    for (let a = 0; a <= TAU + 0.1; a += 0.08) {
-      const wob = Math.sin(a * 5 + this.t * 2) * 4;
-      const px = x + Math.cos(a) * (R * 1.18 + wob);
-      const py = y + Math.sin(a) * (R * 0.86 + wob);
+    for (let a = 0; a <= TAU + 0.1; a += 0.14) {
+      const wob = (Math.sin(a * 5 + this.t * 2 + 1) * 0.5 + 0.5) * 3.6;
+      const px = x + Math.cos(a) * (R * 1.0 + wob);
+      const py = y + Math.sin(a) * (R * 0.68 + wob);
       if (a === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
     }
     ctx.stroke();
+    ctx.restore();
 
     // 椰子树（岛周）
     const n = 5;
     for (let i = 0; i < n; i++) {
       const a = top ? Math.PI * (0.15 + 0.7 * i / (n - 1)) : Math.PI * (1.15 + 0.7 * i / (n - 1));
-      const px = x + Math.cos(a) * R * 0.72;
-      const py = y + Math.sin(a) * R * 0.55;
+      const px = x + Math.cos(a) * R * 0.68;
+      const py = y + Math.sin(a) * R * 0.48;
       this._palm(ctx, px, py, 0.95 + (i % 2) * 0.2);
     }
 
@@ -125,49 +339,58 @@ const Map = {
     this._shipyard(ctx, game, base, team);
   },
 
-  // 椰子树（随 t 摇摆）
+  // 椰子树（折线树干 + 多面体树冠，方型风格）
   _palm(ctx, x, y, s) {
     ctx.save();
     ctx.translate(x, y);
     ctx.scale(s, s);
-    const sway = Math.sin(this.t * 1.1 + x * 0.1) * 0.05;
+    const sway = sqWave(this.t * 1.1 + x * 0.1 + 2) * 0.08;
 
+    // 折线树干（三段折）
     ctx.strokeStyle = '#7a4b26';
     ctx.lineWidth = 7;
-    ctx.lineCap = 'round';
+    ctx.lineCap = 'butt';
     ctx.beginPath();
     ctx.moveTo(0, 0);
-    ctx.quadraticCurveTo(-4 + sway * 20, -30, -8 + sway * 40, -58);
+    ctx.lineTo(-4 + sway * 14, -30);
+    ctx.lineTo(-8 + sway * 30, -58);
     ctx.stroke();
 
+    // 横纹（方块纹）
     ctx.strokeStyle = 'rgba(60,35,15,0.5)';
     ctx.lineWidth = 1.5;
     for (let i = 1; i < 6; i++) {
       const tt = i / 6;
-      const bx = (-8 + sway * 40) * tt * tt;
+      const bx = (-8 + sway * 30) * tt * tt;
       const by = -58 * tt;
       ctx.beginPath(); ctx.moveTo(bx - 3 - sway * 4, by); ctx.lineTo(bx + 3 + sway * 4, by); ctx.stroke();
     }
 
-    const cx = -8 + sway * 40, cy = -58;
+    const cx = -8 + sway * 30, cy = -58;
     ctx.save();
     ctx.translate(cx, cy);
+    // 多面体叶片（三角长条 + 方叶脉）
     const fronds = 7;
     for (let i = 0; i < fronds; i++) {
       const a = (i / fronds) * Math.PI * 2 + sway;
       ctx.save();
       ctx.rotate(a);
       ctx.fillStyle = i % 2 ? '#2f8f4e' : '#37a45a';
+      const fl = 38 + sqWave(this.t * 2 + i + 4) * 4;
       ctx.beginPath();
       ctx.moveTo(0, 0);
-      ctx.quadraticCurveTo(24, -2, 40, 6 + Math.sin(this.t * 2 + i) * 3);
-      ctx.quadraticCurveTo(24, 2, 0, 4);
+      ctx.lineTo(fl * 0.55, -3);
+      ctx.lineTo(fl, 6);
+      ctx.lineTo(fl * 0.5, 3);
       ctx.closePath(); ctx.fill();
+      // 中脉
+      ctx.strokeStyle = 'rgba(25,80,45,0.6)'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(4, 1); ctx.lineTo(fl * 0.85, 5); ctx.stroke();
       ctx.restore();
     }
     ctx.fillStyle = '#6b4a22';
-    ctx.beginPath(); ctx.arc(-4, 2, 3, 0, TAU); ctx.fill();
-    ctx.beginPath(); ctx.arc(4, 2, 3, 0, TAU); ctx.fill();
+    ctx.fillRect(-7, -1, 6, 6);
+    ctx.fillRect(1, -1, 6, 6);
     ctx.restore();
     ctx.restore();
   },
@@ -213,13 +436,16 @@ const Map = {
     ctx.lineTo(w / 2 - 12, -h * 0.5 - 30);
     ctx.closePath(); ctx.fill();
 
-    // 队伍徽记
+    // 队伍徽记（斜方块）
     ctx.fillStyle = team.color;
     ctx.globalAlpha = 0.9;
-    ctx.beginPath(); ctx.arc(0, 0, 22, 0, TAU); ctx.fill();
-    ctx.globalAlpha = 1;
+    ctx.save();
+    ctx.rotate(Math.PI / 4);
+    ctx.fillRect(-16, -16, 32, 32);
     ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(0, 0, 22, 0, TAU); ctx.stroke();
+    ctx.strokeRect(-16, -16, 32, 32);
+    ctx.restore();
+    ctx.globalAlpha = 1;
     ctx.fillStyle = '#fff';
     ctx.font = 'bold 20px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(base.team === 0 ? '我' : '敌', 0, 1);

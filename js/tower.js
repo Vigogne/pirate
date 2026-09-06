@@ -16,6 +16,7 @@ class Tower {
     this.maxHp = towerHp(def.tier);
     this.hp = this.maxHp;
     this.dead = false;
+    this.invuln = def.tier === 2;   // 一塔未全拆前二塔无敌（Game._refreshShields 维护）
     this.angle = def.team === 0 ? 0 : Math.PI;
     this.fireCD = rand(0.3, 1.0);
     this.flash = 0;
@@ -23,7 +24,7 @@ class Tower {
   }
 
   hitBy(dmg, ix, iy, game) {
-    if (this.dead) return;
+    if (this.dead || this.invuln) return;   // 一塔未全拆前二塔无敌
     this.hp -= dmg;
     this.flash = 0.1;
     if (ix !== undefined) Particles.spark(ix, iy, rand(0, TAU), 3, '#ffcf70');
@@ -34,6 +35,7 @@ class Tower {
       Particles.smoke(this.x, this.y, 12, 60);
       AudioFX.explosion(true);
       UI.toast(`${this.name} 已被摧毁！`, 1.8);
+      if (game && game._refreshShields) game._refreshShields();
     }
   }
 
@@ -42,10 +44,10 @@ class Tower {
     this.t += dt;
     this.flash = Math.max(0, this.flash - dt);
 
-    // 索敌：射程内最近的对立单位（英雄优先）
+    // 索敌：射程内最近的对立单位（英雄优先；无敌塔不打）
     let target = null, bestHero = Infinity, bestAny = Infinity;
     for (const u of game.units) {
-      if (u.dead || u.team === this.team) continue;
+      if (u.dead || u.invuln || u.team === this.team) continue;
       const d = dist(this.x, this.y, u.x, u.y);
       if (d <= TOWER_DEF.range) {
         if (u.isHero) { if (d < bestHero) { bestHero = d; target = u; } }
@@ -54,7 +56,7 @@ class Tower {
     }
     if (!target && bestAny < Infinity) {
       for (const u of game.units) {
-        if (u.dead || u.team === this.team || u.isHero) continue;
+        if (u.dead || u.invuln || u.team === this.team || u.isHero) continue;
         const d = dist(this.x, this.y, u.x, u.y);
         if (d <= TOWER_DEF.range && d === bestAny) { target = u; break; }
       }
@@ -82,25 +84,90 @@ class Tower {
   draw(ctx) {
     if (this.dead) return;
     const team = TEAM[this.team];
+
+    // —— 2D 骨骼：塔身 + 炮塔骨（炮塔骨骼朝目标旋转） ——
+    const bId = 'tower_body' + this.tier, tId = 'tower_turret' + this.tier;
+    if (Assets.has(bId)) {
+      if (!this._skel) {
+        const root = new Bone('body', bId, 0, 0, 0, 0);
+        root.child(new Bone('turret', tId, 0, 0, 0, -2));
+        this._skel = new Skeleton(root);
+      }
+      const t2 = this._skel.get('turret');
+      t2.angle = this.angle + Math.PI / 2;   // 精灵朝上 → 标准角补偿
+      this._skel.root.bob = Math.sin(this.t * 2.2) * 0.8;
+      ctx.save();
+      ctx.translate(this.x, this.y);
+      this._skel.draw(ctx, this.rad / 30, Assets);
+      // 队伍旗帜（旗杆 + 波浪三角旗）
+      const flap = Math.sin(this.t * 3.2) * 2.5;
+      ctx.strokeStyle = '#3a2a18'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(0, -this.rad * 0.62); ctx.lineTo(0, -this.rad - 30); ctx.stroke();
+      ctx.fillStyle = team.color;
+      ctx.beginPath();
+      ctx.moveTo(0, -this.rad - 30);
+      ctx.lineTo(19 + flap, -this.rad - 24.5);
+      ctx.lineTo(0, -this.rad - 19);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.75)';
+      ctx.beginPath();
+      ctx.moveTo(0, -this.rad - 30);
+      ctx.lineTo(19 + flap, -this.rad - 24.5);
+      ctx.lineTo(0, -this.rad - 27);
+      ctx.closePath(); ctx.fill();
+      // 无敌护罩（圆形能量泡，玻璃高光弧）
+      if (this.invuln) {
+        const pulse = (Math.sin(this.t * 3) + 1) / 2;
+        const rr = this.rad * (1.04 + pulse * 0.05);
+        ctx.globalAlpha = 0.15 + pulse * 0.12;
+        ctx.fillStyle = '#7fe0ff';
+        ctx.beginPath(); ctx.arc(0, 0, rr, 0, TAU); ctx.fill();
+        ctx.globalAlpha = 0.5 + pulse * 0.3;
+        ctx.strokeStyle = '#aef4ff'; ctx.lineWidth = 2.2;
+        ctx.beginPath(); ctx.arc(0, 0, rr + 1.5, 0, TAU); ctx.stroke();
+        ctx.globalAlpha = 0.4 + pulse * 0.25;
+        ctx.beginPath(); ctx.arc(0, 0, rr - 3, -2.4, -0.9); ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      // 塔标（描边文字）
+      ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.fillText(this.tier === 1 ? '一' : '二', 1, this.rad + 7);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(this.tier === 1 ? '一' : '二', 0, this.rad + 6);
+      // 受击闪光（独立特效）
+      if (this.flash > 0) Assets.drawFlash(ctx, bId, 0, 0, this.rad / 30, 0, this.flash / 0.1);
+      // 血条（塔顶上方）
+      const w = this.rad * 2, h = 7;
+      roundRect(ctx, -w / 2, -this.rad - 42, w, h, 3);
+      ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fill();
+      roundRect(ctx, -w / 2, -this.rad - 42, w * clamp(this.hp / this.maxHp, 0, 1), h, 3);
+      ctx.fillStyle = team.color; ctx.fill();
+      ctx.restore();
+      return;
+    }
+
     ctx.save();
     ctx.translate(this.x, this.y);
 
-    // 水中石台
+    // 水中石台（八边形）
     ctx.fillStyle = 'rgba(140,160,150,0.5)';
-    ctx.beginPath(); ctx.ellipse(0, 10, this.rad * 1.5, this.rad * 0.75, 0, 0, TAU); ctx.fill();
+    octEllPath(ctx, 0, 10, this.rad * 1.5, this.rad * 0.75, 0.2); ctx.fill();
     ctx.fillStyle = '#5a5f56';
-    ctx.beginPath(); ctx.arc(0, 0, this.rad * 1.15, 0, TAU); ctx.fill();
-    ctx.strokeStyle = '#3c4038'; ctx.lineWidth = 3; ctx.stroke();
+    octPath(ctx, 0, 0, this.rad * 1.15, Math.PI / 8); ctx.fill();
+    ctx.strokeStyle = '#3c4038'; ctx.lineWidth = 3;
+    octPath(ctx, 0, 0, this.rad * 1.15, Math.PI / 8); ctx.stroke();
 
-    // 塔身（石砌）
+    // 塔身（八边形石砌）
     const g = ctx.createRadialGradient(-10, -12, 4, 0, 0, this.rad);
     g.addColorStop(0, '#8a917f');
     g.addColorStop(1, '#565c50');
     ctx.fillStyle = g;
-    ctx.beginPath(); ctx.arc(0, 0, this.rad, 0, TAU); ctx.fill();
-    ctx.strokeStyle = '#3c4038'; ctx.lineWidth = 2.5; ctx.stroke();
+    octPath(ctx, 0, 0, this.rad, Math.PI / 8); ctx.fill();
+    ctx.strokeStyle = '#3c4038'; ctx.lineWidth = 2.5;
+    octPath(ctx, 0, 0, this.rad, Math.PI / 8); ctx.stroke();
 
-    // 石纹
+    // 石纹（方块石块）
     ctx.strokeStyle = 'rgba(40,45,38,0.5)'; ctx.lineWidth = 1.2;
     for (let i = 0; i < 5; i++) {
       const a = -Math.PI / 2 + (i - 2) * 0.5;
@@ -109,18 +176,20 @@ class Tower {
       ctx.lineTo(Math.cos(a) * this.rad * 0.9, Math.sin(a) * this.rad * 0.9);
       ctx.stroke();
     }
+    ctx.strokeRect(-this.rad * 0.5, -this.rad * 0.22, this.rad, this.rad * 0.15);
+    ctx.strokeRect(-this.rad * 0.5, this.rad * 0.12, this.rad, this.rad * 0.15);
 
-    // 旋转炮塔（对准目标）
+    // 旋转炮塔（方形底座）
     ctx.save();
     ctx.rotate(this.angle);
     ctx.fillStyle = '#2c2f38';
-    ctx.beginPath(); ctx.arc(0, 0, this.rad * 0.42, 0, TAU); ctx.fill();
+    ctx.fillRect(-this.rad * 0.3, -this.rad * 0.3, this.rad * 0.6, this.rad * 0.6);
     ctx.fillStyle = '#3a3d47';
-    roundRect(ctx, 8, -6, 26, 12, 5); ctx.fill();
+    ctx.fillRect(8, -6, 26, 12);
     ctx.fillStyle = '#111';
-    ctx.beginPath(); ctx.arc(34, 0, 5, 0, TAU); ctx.fill();
+    ctx.fillRect(32, -4, 8, 8);
     ctx.strokeStyle = team.color; ctx.lineWidth = 2.5;
-    ctx.beginPath(); ctx.arc(0, 0, this.rad * 0.55, 0, TAU); ctx.stroke();
+    ctx.strokeRect(-this.rad * 0.42, -this.rad * 0.42, this.rad * 0.84, this.rad * 0.84);
     ctx.restore();
 
     // 雉堞（齿状墙头）
@@ -154,10 +223,25 @@ class Tower {
     ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1;
     roundRect(ctx, bx, by, w, h, 3); ctx.stroke();
 
+    // 无敌护罩（一塔未全拆的二塔，圆形能量泡）
+    if (this.invuln) {
+      const pulse = (Math.sin(this.t * 3) + 1) / 2;
+      ctx.save();
+      const rr = this.rad * (1.08 + pulse * 0.07);
+      ctx.globalAlpha = 0.18 + pulse * 0.16;
+      ctx.fillStyle = '#7fe0ff';
+      ctx.beginPath(); ctx.arc(0, 0, rr, 0, TAU); ctx.fill();
+      ctx.globalAlpha = 0.55;
+      ctx.strokeStyle = '#aef4ff';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(0, 0, rr + 3, 0, TAU); ctx.stroke();
+      ctx.restore();
+    }
+
     if (this.flash > 0) {
       ctx.globalAlpha = this.flash / 0.1;
       ctx.fillStyle = '#fff';
-      ctx.beginPath(); ctx.arc(0, 0, this.rad, 0, TAU); ctx.fill();
+      ctx.fillRect(-this.rad, -this.rad, this.rad * 2, this.rad * 2);
       ctx.globalAlpha = 1;
     }
     ctx.restore();

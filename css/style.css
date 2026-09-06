@@ -120,11 +120,16 @@ html, body {
   padding: 10px 14px 14px;
   backdrop-filter: blur(4px);
 }
+.dock-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
 .dock-title {
   font-size: 13px;
   letter-spacing: 1px;
   color: var(--gold);
-  margin-bottom: 8px;
   opacity: 0.9;
 }
 .dock-content { display: flex; gap: 16px; }
@@ -200,6 +205,8 @@ html, body {
 }
 .module .m-btn:hover { background: rgba(255, 215, 106, 0.32); }
 .module .m-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.m-btns { display: flex; gap: 6px; }
+.m-btns .m-btn { flex: 1; }
 
 /* ---------- 右侧战报栏 ---------- */
 #roster {
@@ -331,6 +338,9 @@ html, body {
 .wcard .wc-note { font-size: 10.5px; opacity: 0.62; margin-top: 1px; }
 .wcard.no-cash { opacity: 0.55; filter: grayscale(0.4); cursor: not-allowed; }
 .wcard.no-cash:hover { border-color: rgba(255, 125, 114, 0.7); transform: none; background: rgba(10, 34, 54, 0.8); }
+.wcard.locked { opacity: 0.72; cursor: not-allowed; border-color: rgba(180, 138, 255, 0.45); }
+.wcard.locked:hover { transform: none; background: rgba(10, 34, 54, 0.8); border-color: rgba(180, 138, 255, 0.8); }
+.wcard .wc-price.lock { color: #b48aff; font-size: 12px; line-height: 1.3; }
 
 /* ---------- Toast ---------- */
 #toast {

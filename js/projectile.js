@@ -57,10 +57,24 @@ class Projectile {
       this.x += this.vx * dt;
       this.y += this.vy * dt;
       this.dist += this.speed * dt;
-      if (this.style === 'torpedo' && this.wake) {
-        this.wake.update(dt);
-        this.wake.push(this.x, this.y, 0.8, Math.cos(this.ang), Math.sin(this.ang));
-        if (Math.random() < 0.4) Particles.foam(this.x, this.y, 1);
+      if (this.style === 'torpedo') {
+        // 鱼雷贴水面航行：会被陆地挡住
+        for (const l of LAND) {
+          if (l.base) continue;
+          const tdx = (this.x - l.x) / (l.rx + this.size), tdy = (this.y - l.y) / (l.ry + this.size);
+          if (tdx * tdx + tdy * tdy < 1) {
+            Particles.explosion(this.x, this.y, 40, '#ff8b2a');
+            Particles.splash(this.x, this.y, 1.6);
+            AudioFX.explosion(false);
+            if (this.splash > 0) this._impact(game, this.x, this.y);
+            return false;
+          }
+        }
+        if (this.wake) {
+          this.wake.update(dt);
+          this.wake.push(this.x, this.y, 0.8, Math.cos(this.ang), Math.sin(this.ang));
+          if (Math.random() < 0.4) Particles.foam(this.x, this.y, 1);
+        }
       }
     }
 
@@ -99,7 +113,7 @@ class Projectile {
     const x0 = this.px !== undefined ? this.px : this.x;
     const y0 = this.py !== undefined ? this.py : this.y;
     for (const u of game.units) {
-      if (u.dead || u.team === this.team || this.hit.has(u)) continue;
+      if (u.dead || u.invuln || u.team === this.team || this.hit.has(u)) continue;
       const hit = this.arc ? circleHit(this.x, this.y, this.size, u.x, u.y, u.rad)
                            : segCircleHit(x0, y0, this.x, this.y, u.x, u.y, u.rad + this.size);
       if (hit) {
@@ -124,7 +138,9 @@ class Projectile {
   }
 
   _damageUnit(u, game) {
-    u.hitBy(this.damage, this.x, this.y, game, this.owner);
+    // 对建筑类（塔/基地结构）有围攻加成，避免推塔久攻不下
+    const dmg = u.isTower ? this.damage * 1.8 : this.damage;
+    u.hitBy(dmg, this.x, this.y, game, this.owner);
     Particles.spark(this.x, this.y, this.ang, 3, '#ffcf70');
     this._awardGold(u, game);
   }
@@ -154,7 +170,7 @@ class Projectile {
       AudioFX.explosion(big);
       Particles.ring(x, y, this.splash);
       for (const u of game.units) {
-        if (u.dead || u.team === this.team) continue;
+        if (u.dead || u.invuln || u.team === this.team) continue;
         if (dist(x, y, u.x, u.y) <= this.splash) {
           u.hitBy(this.damage, x, y, game, this.owner);
           this._awardGold(u, game);
@@ -170,12 +186,32 @@ class Projectile {
   }
 
   draw(ctx) {
+    // —— 像素精灵：弹体（朝右精灵，运行时按发射角旋转） ——
+    const projMap = {
+      cannonball: 'proj_shell', twinball: 'proj_shell', mortar: 'proj_diamond',
+      grenade: 'proj_grenade', harpoon: 'proj_harpoon', torpedo: 'proj_torpedo', bullet: 'proj_bullet',
+    };
+    const pid = projMap[this.style];
+    if (pid && Assets.has(pid)) {
+      if (this.arc && this._arcOffset() > 0) {
+        ctx.save();
+        ctx.globalAlpha = 0.25;
+        ctx.fillStyle = '#062b45';
+        ctx.fillRect(this.x - this.size * 0.5, this.y - this.size * 0.3, this.size, this.size * 0.6);
+        ctx.restore();
+      }
+      const sc = this.style === 'torpedo' ? 1.5 : (this.style === 'harpoon' ? 1.3 : 1.25);
+      const b = this.arc ? this._arcOffset() : 0;
+      Assets.draw(ctx, pid, this.x, this.y - b, sc, this.ang);
+      return;
+    }
+
     ctx.save();
     const a = this.arc ? this._arcOffset() : 0;
     if (this.arc && a > 0) {
       ctx.globalAlpha = 0.25;
       ctx.fillStyle = '#062b45';
-      ctx.beginPath(); ctx.ellipse(this.x, this.y, this.size * 0.8, this.size * 0.4, 0, 0, TAU); ctx.fill();
+      ctx.fillRect(this.x - this.size * 0.5, this.y - this.size * 0.3, this.size, this.size * 0.6);
     }
 
     const dx = Math.cos(this.ang), dy = Math.sin(this.ang);
@@ -184,7 +220,7 @@ class Projectile {
     switch (this.style) {
       case 'bullet':
         ctx.globalAlpha = 1;
-        ctx.strokeStyle = this.color; ctx.lineWidth = this.size * 0.8; ctx.lineCap = 'round';
+        ctx.strokeStyle = this.color; ctx.lineWidth = this.size * 0.8; ctx.lineCap = 'square';
         ctx.beginPath();
         ctx.moveTo(this.x - dx * 14, drawY - dy * 14);
         ctx.lineTo(this.x, drawY);
@@ -193,34 +229,38 @@ class Projectile {
       case 'cannonball':
       case 'twinball':
         ctx.fillStyle = '#1c1f26';
-        ctx.beginPath(); ctx.arc(this.x, drawY, this.size, 0, TAU); ctx.fill();
+        ctx.fillRect(this.x - this.size / 2, drawY - this.size / 2, this.size, this.size);
         ctx.fillStyle = 'rgba(255,255,255,0.35)';
-        ctx.beginPath(); ctx.arc(this.x - this.size * 0.3, drawY - this.size * 0.3, this.size * 0.4, 0, TAU); ctx.fill();
+        ctx.fillRect(this.x - this.size / 2, drawY - this.size / 2, this.size * 0.4, this.size * 0.4);
         break;
       case 'mortar':
       case 'grenade':
+        ctx.save();
+        ctx.translate(this.x, drawY);
+        ctx.rotate(Math.PI / 4);
         ctx.fillStyle = this.style === 'mortar' ? '#2a2a2c' : '#4a3a22';
-        ctx.beginPath(); ctx.arc(this.x, drawY, this.size, 0, TAU); ctx.fill();
+        ctx.fillRect(-this.size / 2, -this.size / 2, this.size, this.size);
         ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.arc(this.x, drawY, this.size, 0, TAU); ctx.stroke();
+        ctx.strokeRect(-this.size / 2, -this.size / 2, this.size, this.size);
+        ctx.restore();
         break;
       case 'harpoon':
-        ctx.strokeStyle = '#c8cdd4'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+        ctx.strokeStyle = '#c8cdd4'; ctx.lineWidth = 3; ctx.lineCap = 'square';
         ctx.beginPath();
         ctx.moveTo(this.x - dx * 26, drawY - dy * 26);
         ctx.lineTo(this.x, drawY);
         ctx.stroke();
         ctx.fillStyle = '#dfe4ea';
         ctx.save(); ctx.translate(this.x, drawY); ctx.rotate(this.ang);
-        ctx.beginPath(); ctx.moveTo(8, 0); ctx.lineTo(-2, -4); ctx.lineTo(-2, 4); ctx.closePath(); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(9, 0); ctx.lineTo(-3, -4); ctx.lineTo(-3, 4); ctx.closePath(); ctx.fill();
         ctx.restore();
         break;
       case 'torpedo':
         ctx.save(); ctx.translate(this.x, drawY); ctx.rotate(this.ang);
         ctx.fillStyle = '#37474f';
-        roundRect(ctx, -12, -3, 22, 6, 3); ctx.fill();
+        ctx.fillRect(-12, -3.5, 24, 7);
         ctx.fillStyle = '#546e7a';
-        ctx.beginPath(); ctx.moveTo(10, -3); ctx.lineTo(16, 0); ctx.lineTo(10, 3); ctx.closePath(); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(11, -3.5); ctx.lineTo(17, 0); ctx.lineTo(11, 3.5); ctx.closePath(); ctx.fill();
         ctx.restore();
         if (this.wake) this.wake.draw(ctx);
         break;

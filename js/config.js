@@ -12,7 +12,7 @@
  * WORLD = 整张图的尺寸（上下四个屏幕，比之前更大）
  * ================================= */
 const VIEW = { w: 1280, h: 900 };
-const WORLD = { w: 1280, h: VIEW.h * 4 };   // 上下四个屏幕
+const WORLD = { w: 1760, h: VIEW.h * 4 };   // 更宽：让野区海兽有地盘
 // 运行时视口（自适应手机横/竖屏，由 main.js 计算；绘制坐标大多用这个）
 const View = { w: VIEW.w, h: VIEW.h };
 
@@ -43,15 +43,32 @@ const MOBA = {
   repairCD: 12,            // 手动修船的冷却（秒）
 };
 
-// 防御塔：每方两座（一塔在外、二塔在内），塔不倒基地不破防
-const TOWER_DEF = { rad: 44, damage: 38, rate: 0.8, range: 280, money: 80 };
+// 防御塔：每方「一塔两座（左右）+ 二塔两座（左右）」，多层护盾：
+// 一塔全拆前二塔无敌；二塔全拆前基地无敌
+const TOWER_DEF = { rad: 44, damage: 36, rate: 0.8, range: 270, money: 80 };
 const TOWERS = [
-  { team: 0, tier: 1, x: WORLD.w / 2, y: WORLD.h - 130 - 800 },   // 我方一塔
-  { team: 0, tier: 2, x: WORLD.w / 2, y: WORLD.h - 130 - 380 },   // 我方二塔
-  { team: 1, tier: 1, x: WORLD.w / 2, y: 130 + 800 },             // 敌方一塔
-  { team: 1, tier: 2, x: WORLD.w / 2, y: 130 + 380 },             // 敌方二塔
+  // 我方（下）：一塔 x2（左右），二塔 x2（左右）
+  { team: 0, tier: 1, x: 620, y: WORLD.h - 130 - 800 },
+  { team: 0, tier: 1, x: 1140, y: WORLD.h - 130 - 800 },
+  { team: 0, tier: 2, x: 620, y: WORLD.h - 130 - 400 },
+  { team: 0, tier: 2, x: 1140, y: WORLD.h - 130 - 400 },
+  // 敌方（上）：镜像
+  { team: 1, tier: 1, x: 620, y: 130 + 800 },
+  { team: 1, tier: 1, x: 1140, y: 130 + 800 },
+  { team: 1, tier: 2, x: 620, y: 130 + 400 },
+  { team: 1, tier: 2, x: 1140, y: 130 + 400 },
 ];
-function towerHp(tier) { return tier === 1 ? 1500 : 2100; }
+function towerHp(tier) { return tier === 1 ? 950 : 1250; }
+
+/* ============ 野区海兽 Boss（各一只，带特色巢穴，不在航路上） ============
+ * lair: 'grotto' 礁石溶洞（章鱼巢） / 'wreck' 沉船残骸（鲨鱼巢）
+ * ================================================================ */
+const JUNGLE_BOSSES = [
+  { id: 'octoken', type: 'octopus', name: '深海章鱼', x: 390, y: 2060, hp: 3200, money: 360, reward: 'ink', rad: 62, lair: 'grotto' },
+  { id: 'sharkking', type: 'shark', name: '猎鲨王', x: 1330, y: 1660, hp: 1800, money: 240, reward: 'fang', rad: 46, lair: 'wreck' },
+];
+const MONSTER_RESPAWN = 60;   // Boss 重生秒数
+const MONSTER_BOSS_NAME = { octopus: '深海章鱼', shark: '猎鲨王' };
 
 /* ============ 陆地分割战场（船会被阻挡） ============
  * 椭圆岛（含基地岛），同时用于绘制与碰撞推挤。
@@ -60,30 +77,71 @@ function towerHp(tier) { return tier === 1 ? 1500 : 2100; }
  * ==================================================== */
 const LAND = [
   // 中路两侧的岛链（中央走廊）
-  { shape: 'ellipse', x: 470, y: 1560, rx: 96, ry: 215 },
-  { shape: 'ellipse', x: 810, y: 1560, rx: 96, ry: 215 },
-  { shape: 'ellipse', x: 470, y: 2160, rx: 96, ry: 215 },
-  { shape: 'ellipse', x: 810, y: 2160, rx: 96, ry: 215 },
+  { shape: 'ellipse', x: 660, y: 1560, rx: 96, ry: 215 },
+  { shape: 'ellipse', x: 1100, y: 1560, rx: 96, ry: 215 },
+  { shape: 'ellipse', x: 660, y: 2160, rx: 96, ry: 215 },
+  { shape: 'ellipse', x: 1100, y: 2160, rx: 96, ry: 215 },
   // 外围分隔岛（堵住斜切）
-  { shape: 'ellipse', x: 165, y: 1300, rx: 72, ry: 155 },
-  { shape: 'ellipse', x: 1115, y: 1300, rx: 72, ry: 155 },
-  { shape: 'ellipse', x: 165, y: 2440, rx: 72, ry: 155 },
-  { shape: 'ellipse', x: 1115, y: 2440, rx: 72, ry: 155 },
+  { shape: 'ellipse', x: 230, y: 1300, rx: 72, ry: 155 },
+  { shape: 'ellipse', x: 1530, y: 1300, rx: 72, ry: 155 },
+  { shape: 'ellipse', x: 230, y: 2440, rx: 72, ry: 155 },
+  { shape: 'ellipse', x: 1530, y: 2440, rx: 72, ry: 155 },
   // 两座基地岛（含在陆地碰撞里）
   { shape: 'ellipse', x: BASES[0].x, y: BASES[0].y, rx: 178, ry: 130, base: true },
   { shape: 'ellipse', x: BASES[1].x, y: BASES[1].y, rx: 178, ry: 130, base: true },
 ];
 
-// 护航舰航行的三条“兵线” x 坐标
-const LANES = [WORLD.w * 0.25, WORLD.w * 0.5, WORLD.w * 0.75];
+// 护航舰航行的三条“兵线” x 坐标（中间留出 30/50/70 的位置）
+const LANES = [WORLD.w * 0.30, WORLD.w * 0.50, WORLD.w * 0.70];
 
-/* ============ 英雄船体 / 风帆 / 装甲（可升级） ============ */
+/* ============ 船体：五种全异造型，各有专属技能，且可强化升级 ============
+ * maxHp/size：基础耐久与体型；cost：购买价（旧船体按原价卖回）
+ * skill：技能 id / 名称 / 图标 / 描述 / dur / cd
+ * unlock：'boss' = 击败章鱼+鲨鱼后才解锁的生物船体
+ * look：造型配色 {hull, deck, trim}；sailType：square 帆/steam 蒸汽/lateen 三角帆/ram 单帆/none
+ * ================================================================== */
 const HULLS = [
-  { name: '轻木船体',   maxHp: 400, size: 1.00, cost: 0,   desc: '小船，朴素耐用。' },
-  { name: '橡木船体',   maxHp: 560, size: 1.07, cost: 200, desc: '更耐久，船型更大。' },
-  { name: '铁木船体',   maxHp: 740, size: 1.15, cost: 520, desc: '吃水更深，血厚。' },
-  { name: '铁甲船体',   maxHp: 960, size: 1.24, cost: 1050, desc: '船身可挡不少炮火。' },
+  {
+    id: 'flag', name: '旗舰型船体', maxHp: 480, size: 1.00, cost: 0,
+    desc: '均衡的古典加农帆船，旗舰之姿。',
+    look: { hull: '#96633a', deck: '#c79a62', trim: '#f2efe0' }, sailType: 'square',
+    skill: { id: 'sprint', name: '疾风冲刺', icon: '💨', desc: '8 秒内航速 +60%', dur: 8, cd: 18 },
+  },
+  {
+    id: 'bulwark', name: '铁壁型船体', maxHp: 780, size: 1.14, cost: 420,
+    desc: '蒸汽铁甲舰，铆接的重铁外壳，怒涛难撼。',
+    look: { hull: '#46525e', deck: '#59646f', trim: '#93a0ad' }, sailType: 'steam',
+    skill: { id: 'iron', name: '铁甲铁幕', icon: '🛡️', desc: '4 秒内受到伤害 -75%', dur: 4, cd: 22 },
+  },
+  {
+    id: 'gale', name: '疾风型船体', maxHp: 430, size: 0.94, cost: 300,
+    desc: '轻快的纵帆快艇，又长又窄，与风同速。',
+    look: { hull: '#2f7f8f', deck: '#3e98a8', trim: '#e8f4f6' }, sailType: 'lateen',
+    skill: { id: 'fury', name: '速射狂热', icon: '⚡', desc: '6 秒内射速 +55%', dur: 6, cd: 20 },
+  },
+  {
+    id: 'ram', name: '破浪型船体', maxHp: 570, size: 1.08, cost: 520,
+    desc: '重型冲撞舰，黄铜撞角立于船头。',
+    look: { hull: '#8a4a34', deck: '#a86a48', trim: '#e8d9c2' }, sailType: 'ram',
+    skill: { id: 'ram', name: '破浪冲撞', icon: '🌊', desc: '向前猛冲，撞穿路径上的敌舰', dur: 0.6, cd: 14 },
+  },
+  {
+    id: 'bio', name: '生物型船体', maxHp: 720, size: 1.18, cost: 900, unlock: 'boss',
+    desc: '章鱼之躯、鲨鱼之首的活体战船——击败两大海兽后苏醒。',
+    look: { hull: '#7a4fae', deck: '#8a5ac0', trim: '#b48aff' }, sailType: 'none',
+    skill: { id: 'bio', name: '深海狂暴', icon: '🐙', desc: '8 秒内减伤 35% 且航速 +35%', dur: 8, cd: 20 },
+  },
 ];
+const HULL_MAX_LV = 5;
+function hullLevelCost(hullId, nextLv) { return 160 + nextLv * 240; }
+// 某船体在指定等级下的实际数值
+function hullStatsAt(def, lv) {
+  const k = lv - 1;
+  return {
+    maxHp: Math.round(def.maxHp * (1 + 0.14 * k)),
+    size: def.size * (1 + 0.035 * k),
+  };
+}
 const SAILS = [
   { name: '旧布帆',   speed: 160, reloadMul: 1.00, cost: 0,   desc: '聊胜于无。' },
   { name: '亚麻帆',   speed: 215, reloadMul: 0.94, cost: 150, desc: '顺风好调头。' },
@@ -171,12 +229,32 @@ const WEAPONS = {
     color: '#ffd76a', size: 3, token: 'bullet',
     grow: { dmg: 1.2, rate: 1.12, range: 1.06 },
   },
+  /* --- 野区 Boss 掉落的特殊装备（unlockKey=击败对应 Boss 解锁） --- */
+  ink: {
+    id: 'ink', name: '墨汁炮', icon: '🐙',
+    desc: '击败深海章鱼解锁。泼出大片墨汁，大范围腐蚀爆破，暗伤船体。',
+    kind: 'projectile', style: 'mortar',
+    damage: 42, rate: 0.5, range: 480, speed: 320,
+    count: 1, spread: 0, pierce: 0, splash: 96, arc: true, arcH: 240,
+    color: '#5a4a7a', size: 7, token: 'mortar', unlockKey: 'octopus',
+    grow: { dmg: 1.27, rate: 1.08, range: 1.06 },
+  },
+  fang: {
+    id: 'fang', name: '鲨牙弩', icon: '🦈',
+    desc: '击败猎鲨王解锁。鲨牙巨弩，射速快，贯穿整排敌舰。',
+    kind: 'projectile', style: 'harpoon',
+    damage: 34, rate: 0.9, range: 390, speed: 800,
+    count: 1, spread: 0, pierce: 6, splash: 0, arc: false, arcH: 0,
+    color: '#9adcff', size: 5, token: 'harpoon', unlockKey: 'shark',
+    grow: { dmg: 1.25, rate: 1.1, range: 1.07 },
+  },
 };
 const WEAPON_MAX_LEVEL = 5;
-const WEAPON_ORDER = ['cannon', 'twin', 'mortar', 'grenade', 'harpoon', 'flame', 'torpedo', 'mgun'];
+const WEAPON_ORDER = ['cannon', 'twin', 'mortar', 'grenade', 'harpoon', 'flame', 'torpedo', 'mgun', 'ink', 'fang'];
 const WEAPON_BASE_COST = {
   cannon: 0, twin: 220, mortar: 300, grenade: 240,
   harpoon: 340, flame: 300, torpedo: 420, mgun: 200,
+  ink: 520, fang: 480,
 };
 function weaponUpgradeCost(weaponId, nextLevel) {
   return Math.round((90 + nextLevel * 120) * (weaponId === 'cannon' ? 1 : 1.15));

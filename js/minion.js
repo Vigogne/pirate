@@ -55,10 +55,10 @@ class Minion {
     this.wake.update(dt);
     const px = this.x, py = this.y;
 
-    // 索敌（射程内最近的对立单位）
+    // 索敌（射程内最近的对立单位；无敌塔不索敌）
     let target = null, best = Infinity;
     for (const u of game.units) {
-      if (u.dead || u.team === this.team) continue;
+      if (u.dead || u.invuln || u.team === this.team) continue;
       const d = dist(this.x, this.y, u.x, u.y);
       if (d <= this.range && d < best) { best = d; target = u; }
     }
@@ -113,6 +113,51 @@ class Minion {
 
   draw(ctx) {
     if (this.dead) return;
+
+    // —— 2D 骨骼：船体部件 + 帆骨（随航行摆动/鼓风） ——
+    const sprBase = this.rad < 28 ? 'min_sloop' : 'min_gunboat';
+    if (Assets.has(sprBase + '_b')) {
+      if (!this._skel) {
+        const root = new Bone('root', sprBase + '_b', 0, 0, 0, 0);
+        root.child(new Bone('mast', sprBase + '_m', 0, -6, 0, -11));
+        this._skel = new Skeleton(root);
+      }
+      const m = this._skel.get('mast');
+      m.angle = Math.sin(this.t * (this.marching ? 3.2 : 1.8)) * 0.12;
+      m.sx = 1 + Math.sin(this.t * (this.marching ? 3.6 : 2.2)) * 0.08;
+      this._skel.root.bob = Math.sin(this.t * 1.8) * (this.marching ? 1.8 : 0.9);
+      ctx.save();
+      ctx.translate(this.x, this.y);
+      this.wake.draw(ctx);
+      ctx.rotate(this.angle);
+      this._skel.draw(ctx, 1.9 * this.size, Assets);
+      // 队伍色横条（扇形块状）
+      ctx.fillStyle = TEAM[this.team].color;
+      ctx.globalAlpha = 0.92;
+      ctx.fillRect(-this.rad * 0.5, -this.rad * 0.34, this.rad, 4);
+      ctx.globalAlpha = 1;
+      if (this.flash > 0) {
+        const st = (this.flash / 0.1);
+        if (Assets.has(sprBase + '_b__e')) {
+          Assets.drawFlash(ctx, sprBase + '_b', 0, 0, 1.9 * this.size, 0, st * 0.9);
+        } else {
+          ctx.globalAlpha = st;
+          ctx.fillStyle = '#fff';
+          ctx.fillRect(-this.rad, -this.rad, this.rad * 2, this.rad * 2);
+          ctx.globalAlpha = 1;
+        }
+      }
+      ctx.restore();
+      if (this.hp < this.maxHp) {
+        const w = this.rad * 1.7, h = 4;
+        roundRect(ctx, this.x - w / 2, this.y - this.rad - 10, w, h, 2);
+        ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fill();
+        roundRect(ctx, this.x - w / 2, this.y - this.rad - 10, w * clamp(this.hp / this.maxHp, 0, 1), h, 2);
+        ctx.fillStyle = TEAM[this.team].color; ctx.fill();
+      }
+      return;
+    }
+
     ctx.save();
     ctx.translate(this.x, this.y);
     this.wake.draw(ctx);
@@ -191,11 +236,11 @@ class Minion {
     ctx.lineTo(0, -R * 0.92);
     ctx.closePath(); ctx.fill();
 
-    // 船头小炮（炮口朝船头向前 = 发射方向）
+    // 船头小炮（炮口朝船头向前 = 发射方向，方底座）
     ctx.fillStyle = '#22262e';
-    ctx.beginPath(); ctx.arc(0, -R * 0.42, R * 0.16, 0, TAU); ctx.fill();
+    ctx.fillRect(-R * 0.16, -R * 0.58, R * 0.32, R * 0.32);
     ctx.fillStyle = '#33383f';
-    roundRect(ctx, -R * 0.07, -R * 0.78, R * 0.14, R * 0.4, R * 0.07); ctx.fill();
+    roundRect(ctx, -R * 0.07, -R * 0.78, R * 0.14, R * 0.4, R * 0.04); ctx.fill();
 
     // 艉舵
     ctx.fillStyle = shade(this.palette[0], -50);
@@ -204,7 +249,7 @@ class Minion {
     if (this.flash > 0) {
       ctx.globalAlpha = this.flash / 0.1;
       ctx.fillStyle = '#fff';
-      ctx.beginPath(); ctx.arc(0, 0, R, 0, TAU); ctx.fill();
+      ctx.fillRect(-R, -R, R * 2, R * 2);
       ctx.globalAlpha = 1;
     }
     ctx.restore();

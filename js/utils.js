@@ -53,6 +53,57 @@ function hexA(hex, alpha) {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
+// sin 归一到 0..1
+function sin01(v) { return (Math.sin(v) + 1) / 2; }
+
+/* —— 方型风格化作图工具：圆 → 八边形，椭圆 → 棱角多边形，方波 —— */
+function octPts(rx, ry, rot = 0) {
+  const pts = [];
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * TAU + Math.PI / 8 + rot;
+    pts.push([Math.cos(a) * rx, Math.sin(a) * ry]);
+  }
+  return pts;
+}
+function octPath(ctx, x, y, r, rot = 0) {
+  const pts = octPts(r, r, rot);
+  ctx.beginPath();
+  ctx.moveTo(x + pts[0][0], y + pts[0][1]);
+  for (let i = 1; i < 8; i++) ctx.lineTo(x + pts[i][0], y + pts[i][1]);
+  ctx.closePath();
+}
+function octEllPath(ctx, x, y, rx, ry, rot = 0) {
+  const pts = octPts(rx, ry, rot);
+  ctx.beginPath();
+  ctx.moveTo(x + pts[0][0], y + pts[0][1]);
+  for (let i = 1; i < 8; i++) ctx.lineTo(x + pts[i][0], y + pts[i][1]);
+  ctx.closePath();
+}
+function diaPath(ctx, x, y, r) {
+  ctx.beginPath();
+  ctx.moveTo(x, y - r); ctx.lineTo(x + r, y); ctx.lineTo(x, y + r); ctx.lineTo(x - r, y);
+  ctx.closePath();
+}
+function sqPolyPath(ctx, pts) {
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath();
+}
+// 方波化（正弦 → 阶梯状，用于水面与波动纹理）
+function sqWave(v) {
+  const s = Math.sin(v);
+  return Math.sign(s) * Math.min(1, Math.abs(s) * 2.4);
+}
+// 小地图/标记用菱形方块
+function cla(ctx, x, y, r) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(Math.PI / 4);
+  ctx.fillRect(-r, -r, r * 2, r * 2);
+  ctx.restore();
+}
+
 // 颜色明暗调整（hex -> rgb，amt 为 ±）
 function shade(hex, amt) {
   const c = hex.replace('#', '');

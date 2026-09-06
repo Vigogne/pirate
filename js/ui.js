@@ -30,6 +30,7 @@ const UI = {
     this.els.rosterBody = gid('roster-body');
     this.els.announce = gid('announce');
     this.els.repairBtn = gid('btn-repair');
+    this.els.skillBtn = gid('btn-skill');
 
     this._buildSlots();
     this._buildModules();
@@ -59,8 +60,11 @@ const UI = {
       gid('btn-cheat-auto').textContent = game.cheatOn ? '自动刷钱:开' : '自动刷钱:关';
       gid('btn-cheat-auto').classList.toggle('on', game.cheatOn);
     });
+    gid('btn-dock-close').addEventListener('click', () => this.toggleDock(false));
     gid('picker-close').addEventListener('click', () => this.closePicker());
     this.els.picker.addEventListener('click', (e) => { if (e.target === this.els.picker) this.closePicker(); });
+
+    if (this.els.skillBtn) this.els.skillBtn.addEventListener('click', () => game.useSkill());
 
     const rot = gid('roster-toggle');
     rot.addEventListener('click', () => {
@@ -145,8 +149,22 @@ const UI = {
 
   _buildModules() {
     this.moduleNodes = {};
+    // 船体模块：两个按钮（强化 / 更换）
+    {
+      const el = this.els.modHull;
+      el.innerHTML = `<div class="m-title">🛶 船体（技能）</div><div class="m-name"></div><div class="m-stat"></div>
+        <div class="m-btns">
+          <button class="m-btn" data-act="up">强化船体</button>
+          <button class="m-btn" data-act="swap">更换</button>
+        </div>`;
+      el.querySelector('[data-act="up"]').addEventListener('click', () => this.game.upgradeHull());
+      el.querySelector('[data-act="swap"]').addEventListener('click', () => this.openHullPicker());
+      this.moduleNodes.hull = {
+        el, name: el.querySelector('.m-name'), stat: el.querySelector('.m-stat'),
+        btn: el.querySelector('[data-act="up"]'), btn2: el.querySelector('[data-act="swap"]'),
+      };
+    }
     const defs = [
-      { key: 'hull', el: this.els.modHull, title: '🛶 船体', label: '强化船体' },
       { key: 'sail', el: this.els.modSail, title: '⛵ 风帆', label: '强化风帆' },
       { key: 'armor', el: this.els.modArmor, title: '🛡️ 装甲', label: '强化装甲' },
     ];
@@ -186,6 +204,22 @@ const UI = {
       }
     }
 
+    // 船体技能按钮
+    if (this.els.skillBtn) {
+      const sk = p.hullDef && p.hullDef.skill;
+      if (!sk) { this.els.skillBtn.disabled = true; this.els.skillBtn.textContent = '—'; }
+      else if (p.skillCd > 0) {
+        this.els.skillBtn.disabled = true;
+        this.els.skillBtn.textContent = `${sk.icon}${Math.ceil(p.skillCd)}s`;
+        this.els.skillBtn.classList.remove('on');
+      } else {
+        this.els.skillBtn.disabled = false;
+        this.els.skillBtn.textContent = p.skillT > 0 ? `${sk.icon} 生效` : sk.icon;
+        this.els.skillBtn.classList.toggle('on', p.skillT > 0);
+      }
+      this.els.skillBtn.title = `技能：${sk.name}（${sk.desc}）· 冷却 ${sk.cd}s · 按 Q`;
+    }
+
     this._refreshRoster();
 
     if (this.dockOpen) this._refreshSlots();
@@ -211,9 +245,27 @@ const UI = {
       }
       node.title = `${w.name} · 点击更换装备`;
     }
-    this._refreshModule('hull', HULLS, p.tierHull, (t) => `最大耐久 ${t.maxHp} · 尺寸 ${t.size.toFixed(2)}`);
+    this._refreshHull();
     this._refreshModule('sail', SAILS, p.tierSail, (t) => `航速 ${t.speed} · 装弹 ${(t.reloadMul * 100).toFixed(0)}%`);
     this._refreshModule('armor', ARMORS, p.tierArmor, (t) => `减伤 ${(t.reduce * 100).toFixed(0)}% · +${t.maxHp} 耐久`);
+  },
+
+  _refreshHull() {
+    const p = this.game.player;
+    const h = p.hullDef;
+    if (!h) return;
+    const node = this.moduleNodes.hull;
+    const lv = p.hullLv[p.hullId] || 1;
+    const stats = hullStatsAt(h, lv);
+    node.name.textContent = `${h.name} Lv.${lv}`;
+    node.stat.innerHTML = `耐久 ${stats.maxHp + ARMORS[p.tierArmor].maxHp} · 体型 ${stats.size.toFixed(2)}<br/>技能 ${h.skill.icon} ${h.skill.name}：${h.skill.desc}`;
+    if (lv >= HULL_MAX_LV) { node.btn.textContent = '已满级'; node.btn.disabled = true; }
+    else {
+      const cost = hullLevelCost(p.hullId, lv);
+      node.btn.textContent = `强化 ${cost}💰`;
+      node.btn.disabled = p.gold < cost;
+    }
+    if (node.btn2) node.btn2.disabled = false;
   },
 
   _refreshModule(key, arr, tier, stat) {
@@ -240,16 +292,20 @@ const UI = {
       const w = WEAPONS[wid];
       const st = weaponStats(wid, 1);
       const cost = WEAPON_BASE_COST[wid];
+      const locked = !!(w.unlockKey && !this.game.isUnlocked(0, w.unlockKey));
       const afford = this.game.player.gold >= cost;
       const card = document.createElement('div');
-      card.className = 'wcard' + (slot.weaponId === wid ? ' equipped' : '') + (afford ? '' : ' no-cash');
+      card.className = 'wcard' + (slot.weaponId === wid ? ' equipped' : '') + (afford ? '' : ' no-cash') + (locked ? ' locked' : '');
       card.innerHTML = `
         <div class="wc-head"><span class="wc-icon">${w.icon}</span><span class="wc-name">${w.name}</span><span class="wc-lv">${slot.weaponId === wid ? '装备中' : ''}</span></div>
         <div class="wc-desc">${w.desc}</div>
         <div class="wc-stats">伤害 ${st.damage} · 射速 ${st.rate.toFixed(1)}<br/>射程 ${Math.round(st.range)}${st.splash ? ' · 溅射 ' + st.splash : ''}</div>
-        <div class="wc-price ${afford ? 'ok' : 'no'}">💰 ${cost}</div>
-        <div class="wc-note">卖旧武器 +${refund}</div>`;
+        ${locked
+          ? `<div class="wc-price lock">🔒 击败「${MONSTER_BOSS_NAME[w.unlockKey]}」解锁</div>`
+          : `<div class="wc-price ${afford ? 'ok' : 'no'}">💰 ${cost}</div>`}
+        <div class="wc-note">${locked ? '野区 Boss 掉落' : '卖旧武器 +' + refund}</div>`;
       card.addEventListener('click', () => {
+        if (locked) { this.toast(`🔒 去野区击败「${MONSTER_BOSS_NAME[w.unlockKey]}」即可解锁`); return; }
         if (!afford) { this.toast('金币不足，无法购买该武器'); return; }
         this.game.equipWeapon(slotIndex, wid, cost);
         this.closePicker();
@@ -258,7 +314,44 @@ const UI = {
     }
     this.show(this.els.picker);
   },
-  closePicker() { this.hide(this.els.picker); this.pickerSlot = -1; },
+  closePicker() { this.hide(this.els.picker); this.pickerSlot = -1; this.pickerMode = null; },
+
+  /* --------- 船体选择（技能不同） --------- */
+  openHullPicker() {
+    this.pickerMode = 'hull';
+    this.els.pickerTitle.textContent = '选择船体（各有专属技能）';
+    const grid = this.els.pickerGrid;
+    grid.innerHTML = '';
+    const p = this.game.player;
+    const oldRefund = p.hullDef ? p.hullDef.cost : 0;
+    const bossUnlock = this.game.isUnlocked(0, 'octopus') && this.game.isUnlocked(0, 'shark');
+    for (const h of HULLS) {
+      const inUse = p.hullId === h.id;
+      const locked = h.unlock === 'boss' && !bossUnlock;
+      const afford = p.gold >= h.cost;
+      const card = document.createElement('div');
+      card.className = 'wcard' + (inUse ? ' equipped' : '') + (afford ? '' : ' no-cash') + (locked ? ' locked' : '');
+      const lv = p.hullLv[h.id] || 1;
+      card.innerHTML = `
+        <div class="wc-head"><span class="wc-icon">🛶</span><span class="wc-name">${h.name}</span><span class="wc-lv">${inUse ? '装备中' : ''}</span></div>
+        <div class="wc-desc">${h.desc}</div>
+        <div class="wc-stats">耐久 ${h.maxHp} · 体型 ${h.size.toFixed(2)} · 等级 ${lv}/${HULL_MAX_LV}</div>
+        <div class="wc-stats">技能 ${h.skill.icon} <b>${h.skill.name}</b>：${h.skill.desc}（冷却 ${h.skill.cd}s）</div>
+        ${locked
+          ? `<div class="wc-price lock">🔒 击败「深海章鱼」与「猎鲨王」解锁</div>`
+          : `<div class="wc-price ${inUse ? 'ok' : (afford ? 'ok' : 'no')}">${inUse ? '✓ 当前' : '💰 ' + h.cost}</div>`}
+        ${inUse || locked ? '' : `<div class="wc-note">卖旧船体 +${oldRefund}</div>`}`;
+      card.addEventListener('click', () => {
+        if (inUse) { this.closePicker(); return; }
+        if (locked) { this.toast('🔒 先去野区击败章鱼与鲨鱼'); return; }
+        if (!afford) { this.toast('金币不足'); return; }
+        this.game.buyHull(h.id);
+        this.closePicker();
+      });
+      grid.appendChild(card);
+    }
+    this.show(this.els.picker);
+  },
 
   toggleDock(force) {
     this.dockOpen = force === undefined ? !this.dockOpen : force;

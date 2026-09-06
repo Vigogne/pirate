@@ -10,6 +10,7 @@ const Game = {
   heroes: [],
   minions: [],
   towers: [],
+  monsters: [],
   floats: [],
   player: null,
   cam: { x: 0, y: 0 },
@@ -19,12 +20,21 @@ const Game = {
   _prev: {},
   spawnTick: 0,
   spawnIdx: 0,
+  unlocks: { 0: {}, 1: {} },
+  _shieldMsg: { 0: false, 1: false },
 
-  get units() { return this.heroes.concat(this.minions, this.towers); },
+  get units() { return this.heroes.concat(this.minions, this.towers, this.monsters); },
   baseOf(team) { return this.bases.find(b => b.team === team); },
   towersOf(team) { return this.towers.filter(t => t.team === team && !t.dead); },
-  // 塔未拆完前基地免伤
-  baseOpen(team) { return this.towersOf(team).length === 0; },
+  // 多层护盾：一塔全拆前二塔无敌；二塔全拆前基地免伤
+  towerOpen(t) {
+    if (t.tier === 1) return true;
+    return !this.towers.some(x => x.team === t.team && x.tier === 1 && !x.dead);
+  },
+  baseOpen(team) {
+    return !this.towers.some(x => x.team === team && x.tier === 2 && !x.dead);
+  },
+  isUnlocked(team, key) { return !!(this.unlocks[team] && this.unlocks[team][key]); },
 
   // 陆地/塔推挤：船会被陆地阻挡
   landResolve(u) {
@@ -78,6 +88,13 @@ const Game = {
       // 塔下平台也阻挡船只
     }
 
+    // 野区海兽 Boss
+    this.monsters = [];
+    for (const md of JUNGLE_BOSSES) this.monsters.push(new Monster(this, md));
+    this.unlocks = { 0: { ink: false, fang: false }, 1: { ink: false, fang: false } };
+    this._shieldMsg = { 0: false, 1: false };
+    this._refreshShields();
+
     this.minions = [];
     this.floats = [];
     this.spawnTick = 1.5;
@@ -121,7 +138,9 @@ const Game = {
     for (const h of this.heroes) h.update(dt, this);
     for (const t of this.towers) t.update(dt, this);
     for (const m of this.minions) m.update(dt, this);
+    for (const m of this.monsters) m.update(dt, this);
     this.minions = this.minions.filter(m => !m.dead);
+    this._refreshShields();
 
     Projectiles.update(dt, this);
     Particles.update(dt);
@@ -148,6 +167,7 @@ const Game = {
     one('KeyP', () => { if (this.state === 'playing') UI.toggleDock(); });
     one('KeyM', () => { AudioFX.muted = !AudioFX.muted; document.getElementById('btn-mute').textContent = AudioFX.muted ? '🔇' : '🔊'; });
     one('KeyC', () => { if (this.state === 'playing') this.cheatMoney(); });
+    one('KeyQ', () => { if (this.state === 'playing') this.useSkill(); });
   },
 
   frozen() { return this.state !== 'playing' || this.paused || UI.dockOpen; },
@@ -190,6 +210,33 @@ const Game = {
 
   addFloat(x, y, text, color) { this.floats.push({ x, y, text, life: 1.0, color }); },
 
+  /* ---- 塔盾刷新：一塔全拆 → 二塔破防；二塔全拆 → 基地破防 ---- */
+  _refreshShields() {
+    for (const team of [0, 1]) {
+      const t1AllDead = !this.towers.some(x => x.team === team && x.tier === 1 && !x.dead);
+      for (const t of this.towers) {
+        if (t.team !== team || t.dead) continue;
+        if (t.tier === 1) t.invuln = false;
+        else t.invuln = !t1AllDead;
+      }
+      if (t1AllDead && !this._shieldMsg[team]) {
+        this._shieldMsg[team] = true;
+        UI.toast(`${team === 0 ? '我方' : '敌方'}一塔全部摧毁，二塔护盾解除！`, 2.4);
+      }
+    }
+  },
+
+  /* ---- 野区 Boss 击杀结算（赏金已在斩杀结算中发放，这里解锁装备） ---- */
+  onBossDeath(m, killer) {
+    const team = killer && killer.team !== undefined && killer.team !== 2 ? killer.team : 0;
+    // 同时记录 装备id 与 Boss类型 两个键，解锁查询两路都通
+    this.unlocks[team][m.reward] = true;
+    this.unlocks[team][m.type] = true;
+    UI.announce(`${m.name} 被击败！解锁「${WEAPONS[m.reward].name}」`, true);
+    UI.toast(`野区奖励：已解锁特殊装备「${WEAPONS[m.reward].name}」！去船坞装备吧`, 3.0);
+    AudioFX.coin();
+  },
+
   // 英雄被击沉的屏幕中央播报
   announceHeroDeath(victim, killer) {
     const killerName = killer && killer.name ? killer.name : '海怪';
@@ -230,22 +277,71 @@ const Game = {
     UI.refresh();
   },
 
+  /* ---- 船体（选择型，自带技能且可升级；旧船体原价卖回） ---- */
+  buyHull(id) {
+    const p = this.player;
+    const next = HULLS.find(h => h.id === id);
+    if (!next) return;
+    if (p.hullId === id) { UI.toast('已是该船体'); return; }
+    // 生物舰需先击败两大海兽
+    if (next.unlock === 'boss' && !(this.isUnlocked(0, 'octopus') && this.isUnlocked(0, 'shark'))) {
+      UI.toast('🔒 生物型船体：先分别击败深海章鱼与猎鲨王', 2.4);
+      return;
+    }
+    if (p.gold < next.cost) { UI.toast('金币不足'); return; }
+    const oldRefund = p.hullDef ? p.hullDef.cost : 0;
+    const oldMax = p.maxHp;
+    p.gold -= next.cost;
+    p.gold += oldRefund;
+    p.hullId = id;
+    p.recompute();
+    p.hp = Math.min(p.maxHp, p.hp + Math.max(0, p.maxHp - oldMax));
+    UI.toast(`已换装「${next.name}」· 技能：${next.skill.icon} ${next.skill.name}（Q 释放）`, 2.6);
+    AudioFX.upgrade();
+    UI.refresh();
+  },
+
+  /* ---- 强化当前船体（每种船体独立等级，最高 5 级） ---- */
+  upgradeHull() {
+    const p = this.player;
+    const lv = p.hullLv[p.hullId] || 1;
+    if (lv >= HULL_MAX_LV) { UI.toast('该船体已满级'); return; }
+    const cost = hullLevelCost(p.hullId, lv);
+    if (p.gold < cost) { UI.toast('金币不足'); return; }
+    p.gold -= cost;
+    p.hullLv[p.hullId] = lv + 1;
+    const oldMax = p.maxHp;
+    p.recompute();
+    p.hp = Math.min(p.maxHp, p.hp + (p.maxHp - oldMax));
+    UI.toast(`${p.hullDef.name} 强化到 Lv.${lv + 1}！`, 1.5);
+    AudioFX.upgrade();
+    UI.refresh();
+  },
+
+  /* ---- 释放船体技能（Q / 手机按钮） ---- */
+  useSkill() {
+    const p = this.player;
+    if (p.dead) return;
+    if (p.skillCd > 0) { UI.toast(`技能冷却中 ${Math.ceil(p.skillCd)}s`); return; }
+    if (p.tryActivateSkill()) {
+      UI.toast(`${p.hullDef.skill.icon} ${p.hullDef.skill.name}！`, 1.2);
+    }
+  },
+
   upgradeModule(kind) {
     const p = this.player;
     let arr, tier;
-    if (kind === 'hull') { arr = HULLS; tier = p.tierHull; }
-    else if (kind === 'sail') { arr = SAILS; tier = p.tierSail; }
+    if (kind === 'sail') { arr = SAILS; tier = p.tierSail; }
     else { arr = ARMORS; tier = p.tierArmor; }
     if (tier >= arr.length - 1) { UI.toast('已最高级'); return; }
     const next = arr[tier + 1];
     if (p.gold < next.cost) { UI.toast('金币不足'); return; }
     p.gold -= next.cost;
     const oldMax = p.maxHp;
-    if (kind === 'hull') p.tierHull++;
-    else if (kind === 'sail') p.tierSail++;
+    if (kind === 'sail') p.tierSail++;
     else p.tierArmor++;
     p.recompute();
-    if (kind === 'hull' || kind === 'armor') p.hp = Math.min(p.maxHp, p.hp + (p.maxHp - oldMax));
+    if (kind === 'armor') p.hp = Math.min(p.maxHp, p.hp + (p.maxHp - oldMax));
     UI.toast(`已强化 ${next.name}`, 1.4);
     AudioFX.upgrade();
     UI.refresh();
@@ -275,6 +371,7 @@ const Game = {
     this.player.gold += MOBA.cheatGold;
     AudioFX.coin();
     UI.toast(`作弊成功 +${MOBA.cheatGold} 💰`, 1.2);
+    UI.refresh();   // 立刻刷新界面（船坞打开时也不会等关闭才更新）
   },
 
   _gameover() {
@@ -306,6 +403,7 @@ const Game = {
     Map.draw(ctx, this);
     Particles.draw(ctx, 'low');
     for (const t of this.towers) t.draw(ctx);
+    for (const m of this.monsters) m.draw(ctx);
     for (const m of this.minions) m.draw(ctx);
     for (const h of this.heroes) h.draw(ctx, h === this.player);
     Projectiles.draw(ctx);
@@ -329,20 +427,22 @@ const Game = {
     }
   },
 
-  // 移动端虚拟摇杆
+  // 移动端虚拟摇杆（方型底座）
   _drawJoystick(ctx) {
     const j = Input.joystickDraw();
     if (!j) return;
     ctx.save();
     ctx.globalAlpha = 0.35;
     ctx.fillStyle = '#06283e';
-    ctx.beginPath(); ctx.arc(j.cx, j.cy, j.r, 0, TAU); ctx.fill();
+    cla(ctx, j.cx, j.cy, j.r);
     ctx.globalAlpha = 0.5;
     ctx.strokeStyle = '#9adcff'; ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(j.cx, j.cy, j.r, 0, TAU); ctx.stroke();
+    ctx.save(); ctx.translate(j.cx, j.cy); ctx.rotate(Math.PI / 4);
+    ctx.strokeRect(-j.r, -j.r, j.r * 2, j.r * 2);
+    ctx.restore();
     ctx.globalAlpha = 0.6;
     ctx.fillStyle = '#cfeaff';
-    ctx.beginPath(); ctx.arc(j.kx, j.ky, j.r * 0.42, 0, TAU); ctx.fill();
+    ctx.fillRect(j.kx - j.r * 0.3, j.ky - j.r * 0.3, j.r * 0.6, j.r * 0.6);
     ctx.restore();
   },
 
@@ -442,10 +542,20 @@ const Game = {
     for (const t of this.towers) {
       if (t.dead) { ctx.fillStyle = 'rgba(110,110,110,0.4)'; }
       else ctx.fillStyle = TEAM[t.team].color;
+      ctx.globalAlpha = t.invuln ? 0.5 : 1;
       const tx = mx + t.x * sx, ty = my + t.y * sy;
       ctx.beginPath();
       ctx.moveTo(tx, ty - 3.4); ctx.lineTo(tx + 3.4, ty); ctx.lineTo(tx, ty + 3.4); ctx.lineTo(tx - 3.4, ty);
       ctx.closePath(); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+    // 野区 Boss（菱形标记）
+    for (const m of this.monsters) {
+      ctx.fillStyle = '#b48aff';
+      ctx.globalAlpha = m.dead ? 0.3 : 0.9;
+      const tx = mx + m.x * sx, ty = my + m.y * sy;
+      cla(ctx, tx, ty, 4);
+      ctx.globalAlpha = 1;
     }
     // 护航舰
     for (const m of this.minions) {
@@ -453,16 +563,16 @@ const Game = {
       ctx.globalAlpha = 0.75;
       ctx.fillRect(mx + m.x * sx - 1.5, my + m.y * sy - 1.5, 3, 3);
     }
-    // 英雄
+    // 英雄（方块）
     ctx.globalAlpha = 1;
     for (const hcp of this.heroes) {
       if (hcp.dead) {
         ctx.fillStyle = 'rgba(150,150,150,0.5)';
-        ctx.beginPath(); ctx.arc(mx + hcp.x * sx, my + hcp.y * sy, 2.5, 0, TAU); ctx.fill();
+        ctx.fillRect(mx + hcp.x * sx - 2.5, my + hcp.y * sy - 2.5, 5, 5);
         continue;
       }
       ctx.fillStyle = hcp === this.player ? '#ffffff' : TEAM[hcp.team].color;
-      ctx.beginPath(); ctx.arc(mx + hcp.x * sx, my + hcp.y * sy, 3.5, 0, TAU); ctx.fill();
+      cla(ctx, mx + hcp.x * sx, my + hcp.y * sy, 4.5);
     }
     // 相机视口
     ctx.strokeStyle = 'rgba(255,255,255,0.55)';

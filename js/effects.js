@@ -197,31 +197,35 @@ const Particles = {
         case 'smoke':
           ctx.globalAlpha = a * 0.4;
           ctx.fillStyle = p.color;
-          ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, TAU); ctx.fill();
+          ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
           break;
         case 'spark':
           ctx.globalAlpha = a;
           ctx.fillStyle = p.color;
-          ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, TAU); ctx.fill();
+          ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
           break;
         case 'splash':
           ctx.globalAlpha = a * 0.8;
           ctx.fillStyle = p.color;
-          ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, TAU); ctx.fill();
+          ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size * 0.7);
           break;
         case 'fireball':
           ctx.globalAlpha = a;
           ctx.fillStyle = p.color;
-          ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, TAU); ctx.fill();
+          ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
           ctx.globalAlpha = a * 0.7;
           ctx.fillStyle = '#fff2c0';
-          ctx.beginPath(); ctx.arc(p.x, p.y, p.size * 0.55, 0, TAU); ctx.fill();
+          ctx.fillRect(p.x - p.size * 0.28, p.y - p.size * 0.28, p.size * 0.56, p.size * 0.56);
           break;
         case 'ring':
           ctx.globalAlpha = a;
           ctx.strokeStyle = p.color;
           ctx.lineWidth = p.lw || 2.5;
-          ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, TAU); ctx.stroke();
+          ctx.save();
+          ctx.translate(p.x, p.y);
+          ctx.rotate(Math.PI / 4);
+          ctx.strokeRect(-p.size, -p.size, p.size * 2, p.size * 2);
+          ctx.restore();
           break;
         case 'flash':
           ctx.globalAlpha = a;
@@ -240,7 +244,8 @@ const Particles = {
           ctx.globalAlpha = a * 0.85;
           const g = Math.floor(255 * (0.6 + a * 0.4));
           ctx.fillStyle = `rgb(${255},${Math.floor(120 * a + 40)},${Math.floor(30 * a)})`;
-          ctx.beginPath(); ctx.arc(p.x, p.y, p.size * (0.7 + a * 0.4), 0, TAU); ctx.fill();
+          const fs = p.size * (0.7 + a * 0.4);
+          ctx.fillRect(p.x - fs / 2, p.y - fs / 2, fs, fs);
           break;
       }
     }

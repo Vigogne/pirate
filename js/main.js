@@ -35,6 +35,7 @@ function boot() {
 
   Input.init(canvas);
   AudioFX.init();
+  Assets.init(() => {});          // 异步加载本地像素素材（失败则回退过程式绘制）
   UI.init(Game);
   Game.init();
   UI.showMenu();

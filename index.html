@@ -40,6 +40,7 @@
           <div class="bar"><div class="bar-fill ebase" id="ebase-bar"></div></div>
           <span class="hud-num" id="ebase-num">0</span>
         </div>
+        <button id="btn-skill" class="hud-btn skill-btn" title="船体技能（Q）">💨</button>
         <button id="btn-open-menu" class="hud-btn" title="装备 / 升级（P）">⚙️ 装备</button>
         <button id="btn-repair" class="hud-btn" title="修理旗舰号">🔧 修船</button>
         <button id="btn-range" class="hud-btn" title="显示/隐藏武器射程">🎯 射程</button>
@@ -50,7 +51,10 @@
 
     <!-- 底部装备坞：四个炮位 + 模块升级 + 作弊选项 -->
     <div id="dock" class="hidden">
-      <div class="dock-title">船坞 · 装备与升级</div>
+      <div class="dock-head">
+        <span class="dock-title">船坞 · 装备与升级</span>
+        <button id="btn-dock-close" class="close-btn" title="关闭船坞（P）">✕</button>
+      </div>
       <div class="dock-content">
         <div class="slots" id="slots"></div>
         <div class="modules">
@@ -133,6 +137,9 @@
   <!-- 渲染与逻辑（普通脚本，按依赖顺序加载；data 与代码分离便于修改） -->
   <script src="js/utils.js"></script>
   <script src="js/config.js"></script>
+  <script src="assets/manifest.js"></script>
+  <script src="js/assets.js"></script>
+  <script src="js/rig.js"></script>
   <script src="js/audio.js"></script>
   <script src="js/input.js"></script>
   <script src="js/water.js"></script>
@@ -140,6 +147,7 @@
   <script src="js/effects.js"></script>
   <script src="js/projectile.js"></script>
   <script src="js/minion.js"></script>
+  <script src="js/monster.js"></script>
   <script src="js/tower.js"></script>
   <script src="js/ship.js"></script>
   <script src="js/ui.js"></script>
