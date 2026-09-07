@@ -1,15 +1,19 @@
-/* ship.js — 英雄战船：玩家/队友/敌舰共用，完整 4 炮位 + 模块，支持 AI 与转向移动 */
+/* ship.js — 英雄战船：玩家/队友/敌舰共用，炮位随船体阶级（1/2/4）+ 模块，支持 AI 与转向移动 */
 "use strict";
 
-// 炮位在船上的局部坐标（船头朝上为本地系，-y 为前）
+// 炮位在船上的局部坐标（船头朝上为本地系，-y 为前）——按炮位数分级
 const SLOT_POS = [
   [-0.60, -0.34], // 左前
   [ 0.60, -0.34], // 右前
   [-0.50,  0.40], // 左后
   [ 0.50,  0.40], // 右后
 ];
+const SLOT_LAYOUTS = {
+  1: [[0.0, -0.62]],                    // 小艇：单炮位在船头
+  2: [[-0.55, -0.34], [0.55, -0.34]],   // 中型船：前侧双炮位
+  4: SLOT_POS,                          // 大型船：四炮位
+};
 const SLOT_LABELS = ['①', '②', '③', '④'];
-const DEFAULT_SLOTS = ['cannon', 'cannon', 'twin', 'mortar'];
 
 function weaponStats(id, level) {
   const w = WEAPONS[id];
@@ -48,8 +52,8 @@ class Ship {
     this.dead = false;
     this.respawnTimer = 0;
 
-    this.hullId = 'flag';               // 船体类型（带专属技能）
-    this.hullLv = { flag: 1, bulwark: 1, gale: 1, ram: 1, bio: 1 };   // 各船体独立等级
+    this.hullId = cfg.hullId || 'skiff';    // 船体类型（初始小艇，1 炮位）
+    this.hullLv = { skiff: 1, gale: 1, ram: 1, bulwark: 1, flag: 1, bio: 1 };   // 各船体独立等级
     this.tierSail = 0;
     this.tierArmor = 0;
     // 技能状态
@@ -59,9 +63,10 @@ class Ship {
     this.ramHits = new Set();
 
     this.slots = [];
-    const slots = cfg.slots || DEFAULT_SLOTS;
-    for (let i = 0; i < 4; i++) {
-      this.slots.push({ weaponId: slots[i] || 'cannon', level: 1, cd: 0, angle: cfg.team === 0 ? -Math.PI / 2 : Math.PI / 2 });
+    this.growSlots(HULLS.find(h => h.id === this.hullId).slots);
+    const plan = cfg.slots || [];
+    for (let i = 0; i < plan.length && i < this.slots.length; i++) {
+      if (WEAPONS[plan[i]]) this.slots[i].weaponId = plan[i];
     }
 
     this.t = rand(0, TAU);
@@ -79,6 +84,13 @@ class Ship {
     this.retreatT = 0;
 
     this.recompute();
+  }
+
+  /* 按炮位数扩展炮位（新增炮位默认装轻旋炮） */
+  growSlots(n) {
+    while (this.slots.length < n) {
+      this.slots.push({ weaponId: 'swivel', level: 1, cd: 0, angle: this.team === 0 ? -Math.PI / 2 : Math.PI / 2 });
+    }
   }
 
   recompute() {
@@ -173,6 +185,7 @@ class Ship {
     let rldMul = this.reloadMul;
     if (this.skillT > 0 && this.skillId) {
       if (this.skillId === 'sprint') spdMul = 1.6;
+      if (this.skillId === 'paddle') spdMul = 1.35;
       if (this.skillId === 'fury') rldMul = this.reloadMul * 0.65;
       if (this.skillId === 'bio') spdMul = 1.35;   // 深海狂暴：又硬又快
     }
@@ -237,9 +250,9 @@ class Ship {
     this.vx = dt > 0 ? (this.x - px) / dt : 0;
     this.vy = dt > 0 ? (this.y - py) / dt : 0;
 
-    // 射击（4 槽独立；疾风/速射 buff 影响装填）
+    // 射击（炮位循环；疾风/速射 buff 影响装填）
     if (!this.disabled) {
-      for (let i = 0; i < 4; i++) {
+      for (let i = 0; i < this.slots.length; i++) {
         this._updateSlot(this.slots[i], i, dt, game, rldMul);
       }
     }
@@ -410,36 +423,61 @@ class Ship {
   }
 
   _aiGrow() {
-    // 优先升级最便宜的武器，其次模块；留一点金币
-    let bestCost = Infinity, bestAt = -1;
-    for (let i = 0; i < 4; i++) {
+    const G = this.game;
+    // 1) 炮位里还是轻旋炮 → 攒够钱先换真炮（加农炮，之后可升级）
+    for (let i = 0; i < this.slots.length; i++) {
       const s = this.slots[i];
-      if (s.level >= WEAPON_MAX_LEVEL) continue;
+      if (s.weaponId === 'swivel') {
+        const cost = WEAPON_BASE_COST.cannon;
+        if (this.gold >= cost + 260) {
+          this.gold -= cost;
+          s.weaponId = 'cannon';
+          this.recompute();
+          return;
+        }
+      }
+    }
+    // 2) 升级炮位（最便宜的、未满级的）
+    let bestCost = Infinity, bestAt = -1;
+    for (let i = 0; i < this.slots.length; i++) {
+      const s = this.slots[i];
+      if (s.level >= weaponMaxLevel(s.weaponId)) continue;
       const c = weaponUpgradeCost(s.weaponId, s.level);
       if (c < bestCost) { bestCost = c; bestAt = i; }
     }
-    if (bestAt >= 0 && this.gold >= bestCost + 40) {
+    if (bestAt >= 0 && this.gold >= bestCost + 60) {
       this.gold -= bestCost;
       this.slots[bestAt].level++;
       this.recompute();
       return;
     }
-    // 模块（船体为选择型，不再升级；AI 攒够钱换更硬的船体）
+    // 3) 换更大船体（小艇 → 中型 → 大型，旧船原价返售）
+    if (this.hullId === 'skiff' && this.gold >= 480) {
+      const pick = HULLS.find(h => h.id === 'gale');
+      this.gold -= pick.cost;
+      this.hullId = pick.id;
+      this.growSlots(pick.slots);
+      this.recompute();
+      return;
+    }
+    if (this.hullDef && this.hullDef.tier === 2 && this.gold >= 1450) {
+      const pick = HULLS.find(h => h.id === 'flag');
+      const refund = this.hullDef.cost;
+      this.gold -= pick.cost - refund;
+      this.hullId = pick.id;
+      this.growSlots(pick.slots);
+      this.recompute();
+      return;
+    }
+    // 4) 模块升阶（风帆 → 装甲，先便宜的）
     const cand = [
       { key: 'sail', t: this.tierSail, arr: SAILS },
       { key: 'armor', t: this.tierArmor, arr: ARMORS },
     ];
-    if (this.hullId === 'flag' && this.gold >= 620) {
-      const pick = HULLS[this.hullId === 'flag' ? 2 : 1];   // 先疾风后铁壁
-      this.gold -= pick.cost;
-      this.hullId = pick.id;
-      this.recompute();
-      return;
-    }
     cand.sort((a, b) => { const ca = a.arr[a.t + 1] ? a.arr[a.t + 1].cost : Infinity; const cb = b.arr[b.t + 1] ? b.arr[b.t + 1].cost : Infinity; return ca - cb; });
     const k = cand[0];
     const next = k.arr[k.t + 1];
-    if (next && this.gold >= next.cost + 40) {
+    if (next && this.gold >= next.cost + 60) {
       this.gold -= next.cost;
       if (k.key === 'sail') this.tierSail++;
       else this.tierArmor++;
@@ -467,7 +505,8 @@ class Ship {
 
   /* --------- 射击 --------- */
   _slotWorld(idx) {
-    const p = SLOT_POS[idx];
+    const layout = SLOT_LAYOUTS[this.slots.length] || SLOT_POS;
+    const p = layout[idx] || layout[0];
     const lx = p[0] * HALF_WID * this.scale, ly = p[1] * HALF_LEN * this.scale;
     const cos = Math.cos(this.angle), sin = Math.sin(this.angle);
     return {
@@ -542,7 +581,7 @@ class Ship {
     const ang = slot.angle;                        // 与炮管同向：打出去 = 炮口所指
     const tx = slot.aimX, ty = slot.aimY;
     // 各武器炮口位于炮管末端（与 _turret 画法一致）
-    const tips = { cannonball: 30, twinball: 30, mortar: 20, grenade: 21, harpoon: 37, torpedo: 25, bullet: 23, flame: 20 };
+    const tips = { swivel: 16, cannonball: 30, twinball: 30, mortar: 20, grenade: 21, harpoon: 37, torpedo: 25, bullet: 23, flame: 20 };
     const tip = (tips[st.style] || 26) * this.scale;
     const dx = Math.cos(ang), dy = Math.sin(ang);
     const px = -dy, py = dx;                       // 垂直于炮管（双管排布）
@@ -601,7 +640,7 @@ class Ship {
       ctx.save();
       ctx.translate(this.x, this.y);
       ctx.globalAlpha = 0.30 + pulse * 0.30;
-      ctx.strokeStyle = this.skillId === 'sprint' ? '#7ef0a0'
+      ctx.strokeStyle = this.skillId === 'sprint' || this.skillId === 'paddle' ? '#7ef0a0'
         : this.skillId === 'iron' ? '#4db6e8'
         : this.skillId === 'fury' ? '#ffd76a' : '#ff9d4d';
       ctx.lineWidth = 3;
@@ -666,8 +705,8 @@ class Ship {
     // 按船体类型绘制完全不同的造型
     this._drawHullBody(ctx, s, W, L, disabled, team);
 
-    // 四个炮塔
-    for (let i = 0; i < 4; i++) this._turret(ctx, i, s, disabled);
+    // 船体炮塔（按炮位数）
+    for (let i = 0; i < this.slots.length; i++) this._turret(ctx, i, s, disabled);
 
     ctx.restore();
 
@@ -697,6 +736,9 @@ class Ship {
       const mF = root.child(B('mastF', 'ship_flag_mF', 0, -30, 0, -28));
       mF.child(B('flag', 'ship_pennant', 0, -50, 14, -2));
       root.child(B('mastB', 'ship_flag_mB', 0, 14, 0, -24));
+    } else if (hid === 'skiff') {
+      const mF = root.child(B('mastF', 'ship_skiff_m', 0, 28, 0, -22));
+      mF.child(B('flag', 'ship_pennant', 0, -52, 12, -2));
     } else if (hid === 'gale') {
       const mF = root.child(B('mastF', 'ship_gale_m', 0, -6, 0, -50));
       mF.child(B('flag', 'ship_pennant', 0, -88, 14, -2));
@@ -745,11 +787,67 @@ class Ship {
     else if (type === 'gale') this._hullGale(ctx, s, W, L, disabled, team);
     else if (type === 'ram') this._hullRam(ctx, s, W, L, disabled, team);
     else if (type === 'bio') this._hullBio(ctx, s, W, L, disabled, team);
+    else if (type === 'skiff') this._hullSkiff(ctx, s, W, L, disabled, team);
     else this._hullFlag(ctx, s, W, L, disabled, team);
     ctx.globalAlpha = 1;
   }
 
   _lookCol() { return this.hullDef ? this.hullDef.look : { hull: '#96633a', deck: '#c79a62', trim: '#f2efe0' }; }
+
+  /* 舢板艇：小木舟 + 单桅小帆（初始船体，1 炮位） */
+  _hullSkiff(ctx, s, W, L, disabled, team) {
+    const col = this._lookCol();
+    const hullBase = col.hull;
+    const hullPath = () => {
+      ctx.beginPath();
+      ctx.moveTo(0, -L * 0.98);
+      ctx.quadraticCurveTo(W * 0.62, -L * 0.78, W * 0.86, -L * 0.12);
+      ctx.lineTo(W * 0.9, L * 0.5);
+      ctx.quadraticCurveTo(0, L * 0.86, -W * 0.9, L * 0.5);
+      ctx.lineTo(-W * 0.86, -L * 0.12);
+      ctx.quadraticCurveTo(-W * 0.62, -L * 0.78, 0, -L * 0.98);
+      ctx.closePath();
+    };
+    const hg = ctx.createLinearGradient(-W, 0, W, 0);
+    hg.addColorStop(0, shade(hullBase, -34)); hg.addColorStop(0.5, shade(hullBase, 8));
+    hg.addColorStop(1, shade(hullBase, -30));
+    ctx.fillStyle = hg; hullPath(); ctx.fill();
+    ctx.strokeStyle = shade(hullBase, -56); ctx.lineWidth = 2.6; ctx.stroke();
+    // 内舱甲板
+    const deck = () => {
+      ctx.beginPath();
+      ctx.moveTo(0, -L * 0.8);
+      ctx.quadraticCurveTo(W * 0.4, -L * 0.62, W * 0.56, -L * 0.1);
+      ctx.lineTo(W * 0.6, L * 0.36);
+      ctx.quadraticCurveTo(0, L * 0.6, -W * 0.6, L * 0.36);
+      ctx.lineTo(-W * 0.56, -L * 0.1);
+      ctx.quadraticCurveTo(-W * 0.4, -L * 0.62, 0, -L * 0.8);
+      ctx.closePath();
+    };
+    ctx.fillStyle = col.deck; deck(); ctx.fill();
+    ctx.strokeStyle = shade(hullBase, -20); ctx.lineWidth = 1.4; deck(); ctx.stroke();
+    // 甲板板缝
+    ctx.strokeStyle = 'rgba(60,32,12,0.35)'; ctx.lineWidth = 1;
+    for (let i = -1; i <= 1; i++) {
+      ctx.beginPath();
+      ctx.moveTo(i * W * 0.26, -L * 0.66);
+      ctx.quadraticCurveTo(i * W * 0.26, 0, i * W * 0.22, L * 0.4);
+      ctx.stroke();
+    }
+    // 横座板
+    ctx.fillStyle = shade(hullBase, -12);
+    ctx.fillRect(-W * 0.52, L * 0.06 - 2 * s, W * 1.04, 4 * s);
+    ctx.fillRect(-W * 0.58, -L * 0.3 - 2 * s, W * 1.16, 4 * s);
+    // 艏甲板队色带
+    ctx.fillStyle = team.color; ctx.globalAlpha = 0.9;
+    ctx.beginPath();
+    ctx.moveTo(0, -L * 0.96); ctx.lineTo(W * 0.36, -L * 0.72); ctx.lineTo(-W * 0.36, -L * 0.72);
+    ctx.closePath(); ctx.fill();
+    ctx.globalAlpha = 1;
+    // 尾舵
+    ctx.fillStyle = shade(hullBase, -44);
+    roundRect(ctx, -1.5 * s, L * 0.56, 3 * s, 9 * s, 1.5 * s); ctx.fill();
+  }
 
   /* 旗舰型：经典双桅加农帆船 */
   _hullFlag(ctx, s, W, L, disabled, team) {
@@ -1297,7 +1395,8 @@ class Ship {
   }
 
   _turret(ctx, idx, s, disabled) {
-    const p = SLOT_POS[idx];
+    const layout = SLOT_LAYOUTS[this.slots.length] || SLOT_POS;
+    const p = layout[idx] || layout[0];
     const wx = p[0] * HALF_WID * s, wy = p[1] * HALF_LEN * s;
     const slot = this.slots[idx];
     const st = weaponStats(slot.weaponId, slot.level);
@@ -1341,6 +1440,9 @@ class Ship {
 
     ctx.rotate(slot.angle);
     switch (st.style) {
+      case 'swivel':
+        this._barrel(ctx, s, 1, 4, 13, metal, metalDark);
+        break;
       case 'cannonball':
       case 'twinball':
         this._barrel(ctx, s, st.style === 'twinball' ? 2 : 1, 6, 24, metal, metalDark);

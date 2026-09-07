@@ -479,3 +479,57 @@ html, body {
   #roster { top: 150px; }
   .roster-body { width: 150px; }
 }
+
+/* —— 武器/船体阶级徽标 —— */
+.wcard .wc-tier {
+  font-size: 10.5px;
+  color: #ffd76a;
+  margin-bottom: 4px;
+  letter-spacing: 0.5px;
+}
+.wcard .wc-tier.tier-s { color: #b48aff; }
+
+/* —— 设置面板 —— */
+#settings {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(2, 12, 24, 0.62);
+  z-index: 40;
+}
+.settings-panel {
+  width: min(90%, 380px);
+  background: var(--panel);
+  border: 1px solid var(--panel-line);
+  border-radius: 16px;
+  padding: 16px 18px;
+}
+#settings-title { font-size: 17px; color: var(--gold); font-weight: 700; }
+.settings-body { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
+.set-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: rgba(10, 34, 54, 0.8);
+  border: 1px solid rgba(120, 160, 190, 0.35);
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+.set-label { font-size: 13px; color: #dcecf8; }
+.set-btn {
+  background: rgba(38, 66, 88, 0.8);
+  border: 1px solid rgba(120, 160, 190, 0.5);
+  color: #cfeaff;
+  border-radius: 8px;
+  padding: 5px 12px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.set-btn.on { border-color: #7ef0a0; color: #7ef0a0; }
+.set-btn:hover { background: rgba(58, 96, 122, 0.9); }
+.set-vol { flex: 1; accent-color: #ffd76a; }
+.set-vol-num { font-size: 12px; color: #ffd76a; min-width: 36px; text-align: right; }
+.set-note { font-size: 11px; opacity: 0.6; text-align: center; margin-top: 2px; }

@@ -72,12 +72,12 @@ const Game = {
 
     const B0 = this.base0, B1 = this.base1;
     this.heroes = [
-      new Ship(this, { team: 0, ai: false, name: '旗舰号', x: B0.x - 20, y: B0.y - 190, lane: 1, slots: HERO_SLOTS[0] }),
-      new Ship(this, { team: 0, ai: true, name: '护卫号', x: B0.x - 150, y: B0.y - 200, lane: 0, slots: HERO_SLOTS[1] }),
-      new Ship(this, { team: 0, ai: true, name: '先锋号', x: B0.x + 150, y: B0.y - 200, lane: 2, slots: HERO_SLOTS[2] }),
-      new Ship(this, { team: 1, ai: true, name: '掠夺号', x: B1.x - 30, y: B1.y + 190, lane: 1, slots: HERO_SLOTS[3] }),
-      new Ship(this, { team: 1, ai: true, name: '屠夫号', x: B1.x - 150, y: B1.y + 200, lane: 0, slots: HERO_SLOTS[4] }),
-      new Ship(this, { team: 1, ai: true, name: '暗影号', x: B1.x + 150, y: B1.y + 200, lane: 2, slots: HERO_SLOTS[5] }),
+      new Ship(this, { team: 0, ai: false, name: '舢板号', x: B0.x - 20, y: B0.y - 190, lane: 1 }),
+      new Ship(this, { team: 0, ai: true, name: '护卫号', x: B0.x - 150, y: B0.y - 200, lane: 0 }),
+      new Ship(this, { team: 0, ai: true, name: '先锋号', x: B0.x + 150, y: B0.y - 200, lane: 2 }),
+      new Ship(this, { team: 1, ai: true, name: '掠夺号', x: B1.x - 30, y: B1.y + 190, lane: 1 }),
+      new Ship(this, { team: 1, ai: true, name: '屠夫号', x: B1.x - 150, y: B1.y + 200, lane: 0 }),
+      new Ship(this, { team: 1, ai: true, name: '暗影号', x: B1.x + 150, y: B1.y + 200, lane: 2 }),
     ];
     this.player = this.heroes[0];
 
@@ -116,7 +116,7 @@ const Game = {
     UI.showHud();
     UI.toggleDock(false);
     UI.refresh();
-    UI.toast('方向键控制旗舰号！先拆敌塔再打基地，按住 ALT 查看射程', 3.2);
+    UI.toast('方向键控制舢板号！先拆敌塔再打基地，按住 ALT 查看射程', 3.2);
   },
   restart() { this.start(); },
 
@@ -165,12 +165,12 @@ const Game = {
     const one = (code, fn) => { if (Input.down(code) && !p[code]) fn(); p[code] = Input.down(code); };
     one('Space', () => { if (this.state === 'playing') { this.paused = !this.paused; UI.toast(this.paused ? '已暂停（空格继续）' : '继续作战', 1.0); } });
     one('KeyP', () => { if (this.state === 'playing') UI.toggleDock(); });
-    one('KeyM', () => { AudioFX.muted = !AudioFX.muted; document.getElementById('btn-mute').textContent = AudioFX.muted ? '🔇' : '🔊'; });
+    one('KeyM', () => { AudioFX.muted = !AudioFX.muted; AudioFX.applyMute(); UI._syncSoundUI(); });
     one('KeyC', () => { if (this.state === 'playing') this.cheatMoney(); });
     one('KeyQ', () => { if (this.state === 'playing') this.useSkill(); });
   },
 
-  frozen() { return this.state !== 'playing' || this.paused || UI.dockOpen; },
+  frozen() { return this.state !== 'playing' || this.paused || UI.dockOpen || UI.settingsOpen; },
 
   _spawnMinions(dt) {
     for (const b of this.bases) {
@@ -179,7 +179,9 @@ const Game = {
       if (b.spawnT <= 0) {
         b.spawnT = MOBA.minionInterval;
         const teamCount = this.minions.reduce((n, m) => n + (m.team === b.team ? 1 : 0), 0);
-        if (teamCount < MOBA.minionCap) {
+        // 出兵量：基本 1 只，30% 概率一次 2 只（受上限约束）
+        const wave = Math.random() < 0.3 ? 2 : 1;
+        for (let k2 = 0; k2 < wave && teamCount + k2 < MOBA.minionCap; k2++) {
           const type = minionTypeFor(this.spawnIdx++);
           this.minions.push(new Minion(this, b.team, (Math.random() * LANES.length) | 0, type));
         }
@@ -258,14 +260,15 @@ const Game = {
     slot.level = 1;
     this.player.recompute();
     UI.flashSlot(slotIndex);
-    UI.toast(`已装备 ${WEAPONS[weaponId].name}，旧武器原价卖出 +${refund}💰`, 2.0);
+    UI.toast(`已装备 ${WEAPONS[weaponId].name}${refund > 0 ? '，旧武器原价卖出 +' + refund + '💰' : ''}`, 2.0);
     AudioFX.upgrade();
     UI.refresh();
   },
 
   upgradeWeapon(slotIndex) {
     const s = this.player.slots[slotIndex];
-    if (s.level >= WEAPON_MAX_LEVEL) { UI.toast('该武器已满级'); return; }
+    const maxLv = weaponMaxLevel(s.weaponId);
+    if (s.level >= maxLv) { UI.toast(maxLv <= 1 ? '该武器无法升级（高性价比入门炮）' : '该武器已满级'); return; }
     const cost = weaponUpgradeCost(s.weaponId, s.level);
     if (this.player.gold < cost) { UI.toast('金币不足'); return; }
     this.player.gold -= cost;
@@ -294,9 +297,10 @@ const Game = {
     p.gold -= next.cost;
     p.gold += oldRefund;
     p.hullId = id;
+    p.growSlots(next.slots || 4);          // 船体升级 → 解锁更多炮位
     p.recompute();
     p.hp = Math.min(p.maxHp, p.hp + Math.max(0, p.maxHp - oldMax));
-    UI.toast(`已换装「${next.name}」· 技能：${next.skill.icon} ${next.skill.name}（Q 释放）`, 2.6);
+    UI.toast(`已换装「${next.name}」（${HULL_TIER_NAME[next.tier]} · ${next.slots} 炮位）· 技能：${next.skill.icon} ${next.skill.name}（Q 释放）`, 2.8);
     AudioFX.upgrade();
     UI.refresh();
   },
@@ -376,14 +380,14 @@ const Game = {
 
   _gameover() {
     this.state = 'gameover';
-    const stats = `我方基地被摧毁！<br/>坚持了 <b>${this._mmss()}</b><br/>旗舰号击杀 <b>${this.playerKills}</b> 艘敌舰`;
+    const stats = `我方基地被摧毁！<br/>坚持了 <b>${this._mmss()}</b><br/>舢板号击杀 <b>${this.playerKills}</b> 艘敌舰`;
     UI.showGameover(stats);
     UI.hideHud();
   },
   _victory() {
     this.state = 'victory';
     AudioFX.win();
-    const stats = `敌方基地被摧毁！<br/>用时 <b>${this._mmss()}</b><br/>旗舰号击杀 <b>${this.playerKills}</b> 艘敌舰<br/>剩余金币 <b>${fmt(this.player.gold)}</b>`;
+    const stats = `敌方基地被摧毁！<br/>用时 <b>${this._mmss()}</b><br/>舢板号击杀 <b>${this.playerKills}</b> 艘敌舰<br/>剩余金币 <b>${fmt(this.player.gold)}</b>`;
     UI.showVictory(stats);
     UI.hideHud();
   },
@@ -451,10 +455,11 @@ const Game = {
     const p = this.player;
     if (!p) return;
     const cell = 52, gap = 8;
+    const n = p.slots.length;
     const x0 = 14, y0 = View.h - cell - 14;
     ctx.save();
     ctx.textAlign = 'center';
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < n; i++) {
       const slot = p.slots[i];
       const st = weaponStats(slot.weaponId, slot.level);
       const maxCd = (1 / st.rate) * p.reloadMul;

@@ -3,6 +3,7 @@
 
 const Render = { ctx: null, W: VIEW.w, H: VIEW.h, dpr: 1 };
 let _last = 0;
+let _fps = 60;
 
 /* 根据窗口宽高比计算可视范围（保持世界 1280x3600 不变）：
  * - 横屏较宽（>1.42:1）：宽固定 1280，高度按比例收窄（更低看的视野更远）
@@ -71,12 +72,28 @@ function loop(ts) {
   _last = now;
   if (dt > 0.033) dt = 0.033;
   if (dt < 0) dt = 0;
+  if (dt > 0) _fps = _fps * 0.92 + (1 / dt) * 0.08;
 
   Game.update(dt);
   Game.render();
+  drawFps();
   Input.frameEnd();
 
   requestAnimationFrame(loop);
+}
+
+/* 帧数显示（设置面板开关） */
+function drawFps() {
+  if (!Settings.showFps) return;
+  const ctx = Render.ctx;
+  ctx.save();
+  ctx.font = 'bold 13px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillText(`FPS ${Math.round(_fps)}`, 11, 21);
+  ctx.fillStyle = _fps >= 50 ? '#8fe8a0' : (_fps >= 30 ? '#ffd76a' : '#ff8b6a');
+  ctx.fillText(`FPS ${Math.round(_fps)}`, 10, 20);
+  ctx.restore();
 }
 
 window.addEventListener('load', boot);

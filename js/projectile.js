@@ -188,7 +188,7 @@ class Projectile {
   draw(ctx) {
     // —— 像素精灵：弹体（朝右精灵，运行时按发射角旋转） ——
     const projMap = {
-      cannonball: 'proj_shell', twinball: 'proj_shell', mortar: 'proj_diamond',
+      cannonball: 'proj_shell', twinball: 'proj_shell', swivel: 'proj_shell', mortar: 'proj_diamond',
       grenade: 'proj_grenade', harpoon: 'proj_harpoon', torpedo: 'proj_torpedo', bullet: 'proj_bullet',
     };
     const pid = projMap[this.style];

@@ -5,6 +5,7 @@ const AudioFX = {
   ctx: null,
   muted: false,
   master: null,
+  volume: 1,          // 0..1（设置面板调节）
 
   init() {
     if (this.ctx) return;
@@ -12,12 +13,21 @@ const AudioFX = {
       const AC = window.AudioContext || window.webkitAudioContext;
       this.ctx = new AC();
       this.master = this.ctx.createGain();
-      this.master.gain.value = 0.35;
+      this.master.gain.value = this.muted ? 0 : 0.35 * this.volume;
       this.master.connect(this.ctx.destination);
     } catch (e) { this.ctx = null; }
   },
 
   resume() { if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume(); },
+
+  /* 设置音量（0..1）并立即生效 */
+  setVolume(v) {
+    this.volume = clamp(v, 0, 1);
+    this.applyMute();
+  },
+  applyMute() {
+    if (this.master) this.master.gain.value = this.muted ? 0 : 0.35 * this.volume;
+  },
 
   _env(dur, gain = 1) {
     const g = this.ctx.createGain();

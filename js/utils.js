@@ -3,6 +3,9 @@
 
 const TAU = Math.PI * 2;
 
+/* 全局设置（设置面板）：帧数显示 / 声音 / 音量 */
+const Settings = { showFps: false, volume: 1, soundOn: true };
+
 function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
 function lerp(a, b, t) { return a + (b - a) * t; }
 function rand(a = 1, b) { return b === undefined ? Math.random() * a : a + Math.random() * (b - a); }

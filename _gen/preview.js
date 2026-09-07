@@ -53,6 +53,9 @@ compose([P('shark_body2'), P('shark_tail2')], 3, 'shark.png');
 compose([P('shark_head'), P('shark_rear')], 3, 'shark_parts.png');
 compose([P('palm')], 2, 'palm.png');
 compose([P('tower_body1'), P('tower_turret1'), P('tower_body2'), P('tower_turret2')], 3, 'towers.png');
+compose([P('water_0'), P('water_1')], 6, 'water_tiles.png');
+compose([P('foam')], 6, 'foam.png');
+compose([P('ship_skiff_b'), P('ship_skiff_m'), P('turret_swivel')], 3, 'skiff.png');
 
 /* 中路走廊岛的实际拉伸效果（rx=96, ry=215） */
 function stretchDemo() {

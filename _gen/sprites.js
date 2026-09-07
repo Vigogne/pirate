@@ -162,6 +162,40 @@ function bodyBio() {
   return { id: 'ship_bio_b', w: 96, h: 128, c };
 }
 
+/* 舢板艇（小体型：单炮位在船头） */
+function bodySkiff() {
+  const c = new Px(72, 84);
+  const pts = [[36, 4], [52, 18], [60, 38], [60, 60], [48, 74], [36, 79], [24, 74], [12, 60], [12, 38], [20, 18]];
+  c.poly(pts, hex('#8a5a34'));
+  c.line(20, 26, 52, 26, hex('#bd8f58'));
+  c.line(15, 52, 57, 52, hex('#6b4424'));
+  c.line(15, 66, 57, 66, hex('#6b4424'));
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length];
+    c.line(a[0], a[1], b[0], b[1], OUTLINE, 2);
+  }
+  c.poly([[36, 12], [46, 22], [52, 40], [52, 58], [42, 68], [36, 71], [30, 68], [20, 58], [20, 40], [26, 22]], hex('#c79a62'));
+  c.poly([[36, 16], [43, 24], [48, 40], [48, 56], [40, 64], [36, 66]], hex('#d8a86a'));
+  for (let y = 30; y < 64; y += 10) c.hline(23, 49, y, PAL.plank);
+  c.rect(22, 44, 28, 5, hex('#bd8f58'));
+  c.rect(22, 44, 28, 1, hex('#6b4424'));
+  c.rect(34, 0, 4, 12, hex('#6b4424'));
+  mount(c, 36, 22);
+  c.rect(18, 74, 4, 4, PAL.lantern); c.rect(50, 74, 4, 4, PAL.lantern);
+  return { id: 'ship_skiff_b', w: 72, h: 84, c };
+}
+function mastSkiff() {
+  const c = new Px(22, 46);
+  c.vline(11, 0, 44, hex('#6b4424'), 2);
+  c.line(3, 13, 19, 13, hex('#6b4424'), 2);
+  c.rect(3, 14, 16, 20, hex('#f2efe0'));
+  c.rect(3, 14, 16, 2, hex('#d8cfae'));
+  c.rect(3, 31, 16, 3, hex('#bfae8a'));
+  c.vline(11, 14, 34, hex('#d8cfae'));
+  glint(c, 5, 17, hex('#ffffff'));
+  return { id: 'ship_skiff_m', w: 22, h: 46, c };
+}
+
 /* 帆（骨骼部件：底部中心 = 枢轴点） */
 function mastFlag() {
   const c = new Px(34, 60);
@@ -548,6 +582,14 @@ function genTurret(id, style) {
       br(10, 12, 0, 18, PAL.sharkL, PAL.sharkD);
       c.poly([[16, 0], [8, 12], [16, 7], [24, 12]], PAL.white);
       c.rect(14, 14, 4, 3, PAL.sharkD);
+      break;
+    case 'swivel':
+      // 轻旋炮：细管 + 黄铜回转座（高性价比入门炮）
+      br(13, 4, 1, 12, PAL.ironL, PAL.ironD);
+      c.rect(12, 0, 8, 3, OUTLINE);
+      c.rect(14, 11, 6, 5, PAL.brass);
+      c.rect(15, 12, 4, 3, PAL.brassD);
+      c.put(15, 12, PAL.brassXL);
       break;
   }
   return { id, w: 32, h: 32, c };
@@ -968,20 +1010,28 @@ function genProjectiles() {
 }
 function genWaterTiles() {
   const out = [];
-  const base = hex('#1179a6'), light = hex('#1d96bd'), dark = hex('#0d5d84'), deep = hex('#0a4e70');
+  // 半透明水纹纹理：细碎低对比有机斑驳 + 微弧（64px 大格，低重复；叠加在渐变海色上）
   for (let v = 0; v < 2; v++) {
     const c = new Px(64, 64);
-    for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) {
-      const n = ((x * 7 + y * 13 + v * 5) % 17);
-      const baseN = (x * 3 + y * 5) % 23;
-      c.put(x, y, n === 0 ? deep : (n <= 3 ? dark : (n >= 13 ? light : base)));
-      if (baseN === 0) c.put(x, y, light);
-      if (n === 6) c.put(x, y, hex('#2ba8c9'));
+    const spots = [
+      [12, 15, 4.5, 3.5], [40, 9, 3.8, 3], [52, 30, 4.2, 3.4], [22, 45, 5, 4], [45, 52, 4.5, 3.4], [10, 55, 3.5, 2.8], [33, 30, 3.2, 2.6],
+    ];
+    for (let i = 0; i < spots.length; i++) {
+      const [sx, sy, r1, r2] = spots[i];
+      c.poly(coastPts(sx + (v ? 4 : 0), sy, r1, r2, 41 + i * 13 + v, 12, 0.7), [10, 66, 100, 26]);
     }
-    for (let yy = 14; yy < 64; yy += 32) {
-      for (let x = 0; x < 64; x++) {
-        const on = ((x + v * 6) % 16) < 10;
-        if (on) { c.put(x, yy, hex('#9adcff')); if ((x & 1) === 0) c.put(x, yy + 1, hex('#5ec9e0')); }
+    const shines = [[30, 20, 4.2, 3.2], [55, 46, 3.6, 2.8], [16, 37, 3.4, 2.6], [48, 18, 3, 2.4]];
+    for (let i = 0; i < shines.length; i++) {
+      const [sx, sy, r1, r2] = shines[i];
+      c.poly(coastPts(sx - (v ? 3 : 0), sy, r1, r2, 71 + i * 17 + v, 12, 0.65), [126, 218, 240, 22]);
+    }
+    // 细微波弧（半透明短弧线）
+    for (let i = 0; i < 4; i++) {
+      const ax = 8 + ((i * 17 + v * 7) % 44), ay = 6 + ((i * 13) % 48);
+      const rr = 4 + i * 1.7;
+      for (let k = 0; k < 9; k++) {
+        const a = -1.1 + k * 0.18;
+        c.put(Math.round(ax + Math.cos(a) * rr), Math.round(ay + Math.sin(a) * rr * 0.6), [150, 230, 246, 34]);
       }
     }
     out.push({ id: 'water_' + v, w: 64, h: 64, c });
@@ -990,11 +1040,18 @@ function genWaterTiles() {
 }
 function genFoamStrip() {
   const c = new Px(48, 12);
-  for (let y = 0; y < 12; y++) for (let x = 0; x < 48; x++) {
-    const n = ((x * 5 + y * 11) % 13);
-    c.put(x, y, n === 0 ? hex('#5ec9e0') : n > 6 ? hex('#eafcff') : hex('#c8f0f8'));
+  // 有机浪沫：连串圆润碎粒 + 亮心 + 散点
+  const drops = [[6, 7, 3], [13, 5, 2.2], [21, 8, 3.5], [28, 5, 2.4], [35, 7, 3], [42, 5, 2.6], [46, 9, 1.8]];
+  for (const [dx, dy, rr] of drops) {
+    for (let y = -3; y <= 3; y++) for (let x = -3; x <= 3; x++) {
+      const d = Math.hypot(x / rr, y / (rr * 0.8));
+      if (d > 1) continue;
+      const col = d > 0.72 ? hex('#cfeefc') : (d > 0.35 ? hex('#f2feff') : hex('#ffffff'));
+      c.put(Math.round(dx + x), Math.round(dy + y), col);
+    }
   }
-  for (let x = 0; x < 48; x++) if ((x & 1) === 0) c.put(x, 0, hex('#ffffff'));
+  const specks = [[2, 9], [10, 3], [17, 10], [25, 2], [31, 10], [39, 3], [44, 6], [20, 4], [33, 5]];
+  for (const [sx, sy] of specks) c.put(sx, sy, hex('#e8fbff'));
   return { id: 'foam', w: 48, h: 12, c };
 }
 function genSparkle() {
@@ -1008,8 +1065,8 @@ function genSparkle() {
 
 function genAll() {
   const list = [];
-  list.push(bodyFlag(), bodyBulwark(), bodyGale(), bodyRam(), bodyBio());
-  list.push(mastFlag(), mastFlagB(), mastGale(), mastRam(), pennant());
+  list.push(bodyFlag(), bodyBulwark(), bodyGale(), bodyRam(), bodyBio(), bodySkiff());
+  list.push(mastFlag(), mastFlagB(), mastGale(), mastRam(), pennant(), mastSkiff());
   list.push(minBody(false), minBody(true), minMast(false), minMast(true));
   list.push(towerBody(1), towerBody(2), towerTurret(1), towerTurret(2));
   list.push(octBody(), octSeg(false), octSeg(true));
@@ -1018,7 +1075,8 @@ function genAll() {
             genTurret('turret_mortar', 'mortar'), genTurret('turret_grenade', 'grenade'),
             genTurret('turret_harpoon', 'harpoon'), genTurret('turret_flame', 'flame'),
             genTurret('turret_torpedo', 'torpedo'), genTurret('turret_mgun', 'bullet'),
-            genTurret('turret_ink', 'ink'), genTurret('turret_fang', 'fang'));
+            genTurret('turret_ink', 'ink'), genTurret('turret_fang', 'fang'),
+            genTurret('turret_swivel', 'swivel'));
   list.push(genGrotto(), genWreck(), ...genIslands(), genPalm(), genBase(0), genBase(1));
   list.push(...genProjectiles());
   list.push(...genWaterTiles());

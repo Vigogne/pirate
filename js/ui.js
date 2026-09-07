@@ -8,6 +8,7 @@ const UI = {
   moduleNodes: {},
   toastTimer: null,
   dockOpen: false,
+  settingsOpen: false,
   pickerSlot: -1,
   rangeOn: false,     // 触屏端开关：显示武器射程（手机没有 Ctrl）
 
@@ -24,6 +25,7 @@ const UI = {
       pickerGrid: gid('picker-grid'), menu: gid('menu'), gameover: gid('gameover'),
       victory: gid('victory'), goText: gid('go-text'), goStats: gid('go-stats'),
       victoryStats: gid('victory-stats'), toast: gid('toast'),
+      settings: gid('settings'),
     };
     this.els.modHull = gid('mod-hull'); this.els.modSail = gid('mod-sail'); this.els.modArmor = gid('mod-armor');
     this.els.roster = gid('roster');
@@ -41,10 +43,7 @@ const UI = {
     gid('btn-playagain').addEventListener('click', () => game.restart());
     gid('btn-open-menu').addEventListener('click', () => this.toggleDock());
     gid('btn-repair').addEventListener('click', () => game.repairShip());
-    gid('btn-mute').addEventListener('click', () => {
-      AudioFX.muted = !AudioFX.muted;
-      gid('btn-mute').textContent = AudioFX.muted ? '🔇' : '🔊';
-    });
+    gid('btn-mute').addEventListener('click', () => this.toggleSound());
     gid('btn-range').addEventListener('click', () => {
       this.rangeOn = !this.rangeOn;
       gid('btn-range').classList.toggle('on', this.rangeOn);
@@ -63,6 +62,25 @@ const UI = {
     gid('btn-dock-close').addEventListener('click', () => this.toggleDock(false));
     gid('picker-close').addEventListener('click', () => this.closePicker());
     this.els.picker.addEventListener('click', (e) => { if (e.target === this.els.picker) this.closePicker(); });
+
+    // 设置面板（帧数显示 / 声音开关 / 音量）
+    gid('btn-settings').addEventListener('click', () => this.toggleSettings());
+    gid('settings-close').addEventListener('click', () => this.toggleSettings(false));
+    this.els.settings.addEventListener('click', (e) => { if (e.target === this.els.settings) this.toggleSettings(false); });
+    gid('set-fps').addEventListener('click', () => {
+      Settings.showFps = !Settings.showFps;
+      gid('set-fps').textContent = Settings.showFps ? '帧数显示：开' : '帧数显示：关';
+      gid('set-fps').classList.toggle('on', Settings.showFps);
+    });
+    gid('set-sound').addEventListener('click', () => this.toggleSound(true));
+    const vol = gid('set-vol');
+    vol.addEventListener('input', () => {
+      AudioFX.setVolume(Math.round(vol.value) / 100);
+      if (AudioFX.muted) { AudioFX.muted = false; AudioFX.applyMute(); UI._syncSoundUI(); }
+      const vn = gid('set-vol-num');
+      if (vn) vn.textContent = vol.value + '%';
+    });
+    this._syncSoundUI();
 
     if (this.els.skillBtn) this.els.skillBtn.addEventListener('click', () => game.useSkill());
 
@@ -228,17 +246,20 @@ const UI = {
   _refreshSlots() {
     const g = this.game;
     const p = g.player;
+    const n = p.slots.length;
     for (let i = 0; i < 4; i++) {
+      const node = this.slotNodes[i];
+      if (i >= n) { node.style.display = 'none'; continue; }
+      node.style.display = '';
       const slot = p.slots[i];
       const w = WEAPONS[slot.weaponId];
-      const node = this.slotNodes[i];
+      const maxLv = weaponMaxLevel(slot.weaponId);
       node.querySelector('.icon').textContent = w.icon;
-      node.querySelector('.w-name').textContent = w.name;
-      node.querySelector('.w-lv').textContent = slot.level >= WEAPON_MAX_LEVEL ? '★ 已满级' : '★'.repeat(slot.level) + ' Lv.' + slot.level;
+      node.querySelector('.w-name').textContent = `${W_TIER_LABEL[w.tier]} ${w.name}`;
+      node.querySelector('.w-lv').textContent = maxLv <= 1 ? '不可升级' : (slot.level >= maxLv ? '★ 已满级' : '★'.repeat(slot.level) + ' Lv.' + slot.level);
       node.querySelector('.w-desc').textContent = w.desc;
       const btn = node.querySelector('.w-btn');
-      const nextLv = slot.level + 1;
-      if (slot.level >= WEAPON_MAX_LEVEL) { btn.textContent = '已满级'; btn.disabled = true; }
+      if (slot.level >= maxLv) { btn.textContent = maxLv <= 1 ? '无法升级' : '已满级'; btn.disabled = true; }
       else {
         const cost = weaponUpgradeCost(slot.weaponId, slot.level);
         btn.textContent = `升级 ${cost}💰`; btn.disabled = p.gold < cost;
@@ -258,7 +279,7 @@ const UI = {
     const lv = p.hullLv[p.hullId] || 1;
     const stats = hullStatsAt(h, lv);
     node.name.textContent = `${h.name} Lv.${lv}`;
-    node.stat.innerHTML = `耐久 ${stats.maxHp + ARMORS[p.tierArmor].maxHp} · 体型 ${stats.size.toFixed(2)}<br/>技能 ${h.skill.icon} ${h.skill.name}：${h.skill.desc}`;
+    node.stat.innerHTML = `${HULL_TIER_NAME[h.tier]} · ${h.slots} 炮位 · 耐久 ${stats.maxHp + ARMORS[p.tierArmor].maxHp} · 体型 ${stats.size.toFixed(2)}<br/>技能 ${h.skill.icon} ${h.skill.name}：${h.skill.desc}`;
     if (lv >= HULL_MAX_LV) { node.btn.textContent = '已满级'; node.btn.disabled = true; }
     else {
       const cost = hullLevelCost(p.hullId, lv);
@@ -298,6 +319,7 @@ const UI = {
       card.className = 'wcard' + (slot.weaponId === wid ? ' equipped' : '') + (afford ? '' : ' no-cash') + (locked ? ' locked' : '');
       card.innerHTML = `
         <div class="wc-head"><span class="wc-icon">${w.icon}</span><span class="wc-name">${w.name}</span><span class="wc-lv">${slot.weaponId === wid ? '装备中' : ''}</span></div>
+        <div class="wc-tier ${w.tier >= 4 ? 'tier-s' : ''}">${W_TIER_LABEL[w.tier] || ''} · ${weaponMaxLevel(wid) <= 1 ? '⛔ 不可升级' : '可升级至 Lv.' + weaponMaxLevel(wid)}</div>
         <div class="wc-desc">${w.desc}</div>
         <div class="wc-stats">伤害 ${st.damage} · 射速 ${st.rate.toFixed(1)}<br/>射程 ${Math.round(st.range)}${st.splash ? ' · 溅射 ' + st.splash : ''}</div>
         ${locked
@@ -334,6 +356,7 @@ const UI = {
       const lv = p.hullLv[h.id] || 1;
       card.innerHTML = `
         <div class="wc-head"><span class="wc-icon">🛶</span><span class="wc-name">${h.name}</span><span class="wc-lv">${inUse ? '装备中' : ''}</span></div>
+        <div class="wc-tier">${HULL_TIER_NAME[h.tier]} · ${h.slots} 炮位${h.unlock === 'boss' ? ' · 🔒 Boss' : ''}</div>
         <div class="wc-desc">${h.desc}</div>
         <div class="wc-stats">耐久 ${h.maxHp} · 体型 ${h.size.toFixed(2)} · 等级 ${lv}/${HULL_MAX_LV}</div>
         <div class="wc-stats">技能 ${h.skill.icon} <b>${h.skill.name}</b>：${h.skill.desc}（冷却 ${h.skill.cd}s）</div>
@@ -357,6 +380,31 @@ const UI = {
     this.dockOpen = force === undefined ? !this.dockOpen : force;
     if (this.dockOpen) this.show(this.els.dock); else this.hide(this.els.dock);
     if (this.dockOpen) this._refreshSlots();
+  },
+
+  /* --------- 设置面板 --------- */
+  toggleSettings(force) {
+    const open = force === undefined ? this.els.settings.classList.contains('hidden') : force;
+    this.settingsOpen = open;
+    if (open) this.show(this.els.settings); else this.hide(this.els.settings);
+  },
+  toggleSound(syncOnly) {
+    AudioFX.muted = !AudioFX.muted;
+    AudioFX.applyMute();
+    this._syncSoundUI();
+    if (!syncOnly) UI.toast(AudioFX.muted ? '声音已关' : '声音已开', 0.9);
+  },
+  _syncSoundUI() {
+    const gid = (id) => document.getElementById(id);
+    const m = gid('btn-mute');
+    if (m) m.textContent = AudioFX.muted ? '🔇' : '🔊';
+    const s = gid('set-sound');
+    if (s) {
+      s.textContent = AudioFX.muted ? '声音：关' : '声音：开';
+      s.classList.toggle('on', !AudioFX.muted);
+    }
+    const v = gid('set-vol');
+    if (v && document.activeElement !== v) v.value = Math.round((AudioFX.volume || 1) * 100);
   },
 
   flashSlot(i) {

@@ -21,8 +21,8 @@
           <div class="bar"><div class="bar-fill base" id="base-bar"></div></div>
           <span class="hud-num" id="base-num">0</span>
         </div>
-        <div class="hud-item" id="hud-ship" title="旗舰号耐久">
-          <span class="hud-label">⛵ 旗舰号</span>
+        <div class="hud-item" id="hud-ship" title="舢板号耐久">
+          <span class="hud-label">⛵ 舢板号</span>
           <div class="bar"><div class="bar-fill ship" id="ship-bar"></div></div>
           <span class="hud-num" id="ship-num">0</span>
         </div>
@@ -46,6 +46,33 @@
         <button id="btn-range" class="hud-btn" title="显示/隐藏武器射程">🎯 射程</button>
         <button id="btn-pause" class="hud-btn" title="暂停/继续（空格）">⏸ 暂停</button>
         <button id="btn-mute" class="hud-btn" title="音效开关（M）">🔊</button>
+        <button id="btn-settings" class="hud-btn" title="设置：帧数 / 声音">⚙️ 设置</button>
+      </div>
+    </div>
+
+    <!-- 设置面板：帧数显示 / 声音开关 / 音量 -->
+    <div id="settings" class="hidden">
+      <div class="settings-panel">
+        <div class="picker-head">
+          <span id="settings-title">设置</span>
+          <button id="settings-close" class="close-btn">✕</button>
+        </div>
+        <div class="settings-body">
+          <div class="set-row">
+            <span class="set-label">帧数显示（FPS）</span>
+            <button id="set-fps" class="set-btn">帧数显示：关</button>
+          </div>
+          <div class="set-row">
+            <span class="set-label">声音开关</span>
+            <button id="set-sound" class="set-btn on">声音：开</button>
+          </div>
+          <div class="set-row">
+            <span class="set-label">音量</span>
+            <input id="set-vol" class="set-vol" type="range" min="0" max="100" step="1" value="100" />
+            <span class="set-vol-num" id="set-vol-num">100%</span>
+          </div>
+          <div class="set-note">快捷键：M 静音 · P 船坞 · C 作弊刷钱</div>
+        </div>
       </div>
     </div>
 
@@ -99,14 +126,16 @@
         <p class="panel-sub">
           上下两座基地各自动生产<span>护航舰</span>进攻对面，每方还有 <b>一塔 / 二塔</b>防御塔
           —— <b>塔不拆光，基地免伤</b>！<br/>
-          双方各有 <b>3 艘英雄战船</b>（我方：旗舰号由你操控 + 2 名 AI 队友），
+          双方各有 <b>3 艘英雄战船</b>（我方：舢板号由你操控 + 2 名 AI 队友），
           英雄会自主打怪赚钱、升级自己的武器与模块。<br/>
-          地图是一张 4 屏高的大海图，陆地岛群分割战场，船会被陆地阻挡。<br/>
+          <b>船体三级进阶</b>：Ⅰ 小艇（1 炮位）→ Ⅱ 中型船（2 炮位）→ Ⅲ 大型船（4 炮位）；
+          武器分四级，击败野区海兽还能解锁「传说」武器。初始赠送<b>舢板艇 + 轻旋炮</b>。<br/>
+          地图是一张 <b>5 屏高</b>的大海图，陆地岛群分割战场，船会被陆地阻挡。<br/>
           <b>方向键 / WASD</b> 航行（船自动转向） · <b>CTRL</b> 查看武器射程 · <b>SPACE</b> 暂停 ·
-          <b>P</b> 船坞 · <b>C</b> 作弊刷钱
+          <b>P</b> 船坞 · <b>Q</b> 船体技能 · <b>C</b> 作弊刷钱
         </p>
         <div class="controls-row">
-          <span>🧭 方向键移动</span><span>🎯 武器自动开火</span><span>🤖 队友自动强化</span><span>🗺️ 4 屏大海图</span>
+          <span>🧭 方向键移动</span><span>🎯 武器自动开火</span><span>🤖 队友自动强化</span><span>🗺️ 5 屏大海图</span>
         </div>
         <p class="panel-sub" style="font-size:12px;opacity:.75">
           📱 手机版：在画面上<b>按住拖动即为摇杆</b>；右上角按钮：装备 / 修船 / 🎯射程 / ⏸暂停 / 静音。建议横屏玩耍。
