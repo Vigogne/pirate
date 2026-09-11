@@ -11,19 +11,28 @@ const Game = {
   minions: [],
   towers: [],
   monsters: [],
+  mines: [],
+  hazards: [],
+  chests: [],
+  beacons: [],
+  teamBuffs: { 0: {}, 1: {} },
   floats: [],
   player: null,
   cam: { x: 0, y: 0 },
   paused: false,
   cheatOn: false,
   repairCD: 0,
+  slowmo: 0,        // 击沉特写：慢动作剩余时间
+  shake: 0,         // 屏幕震动强度
+  zoomKick: 0,      // 击沉/爆炸的镜头轻推
+  ambientT: 8,      // 环境音调度
   _prev: {},
   spawnTick: 0,
   spawnIdx: 0,
   unlocks: { 0: {}, 1: {} },
   _shieldMsg: { 0: false, 1: false },
 
-  get units() { return this.heroes.concat(this.minions, this.towers, this.monsters); },
+  get units() { return this.heroes.concat(this.minions, this.towers, this.monsters, this.chests || []); },
   baseOf(team) { return this.bases.find(b => b.team === team); },
   towersOf(team) { return this.towers.filter(t => t.team === team && !t.dead); },
   // 多层护盾：一塔全拆前二塔无敌；二塔全拆前基地免伤
@@ -36,7 +45,26 @@ const Game = {
   },
   isUnlocked(team, key) { return !!(this.unlocks[team] && this.unlocks[team][key]); },
 
-  // 陆地/塔推挤：船会被陆地阻挡
+  /* ---- 海况：洋流 + 风 的单位推力 ---- */  applyDrift(u, dt, scale = 1) {
+    let dx = Weather.windX(), dy = Weather.windY();
+    for (const cu of CURRENTS) {
+      const nx = (u.x - cu.x) / cu.rx, ny = (u.y - cu.y) / cu.ry;
+      if (nx * nx + ny * ny <= 1) { dx += cu.ax * cu.force; dy += cu.ay * cu.force; }
+    }
+    if (dx || dy) { u.x += dx * scale * dt; u.y += dy * scale * dt; }
+  },
+  /* ---- 浅滩：大船（Ⅲ 大型船）减速，小艇不受影响 ---- */
+  shoalMul(u) {
+    const tier = u.hullDef ? u.hullDef.tier : 1;
+    if (tier < 3) return 1;
+    for (const s of SHOALS) {
+      const nx = (u.x - s.x) / s.rx, ny = (u.y - s.y) / s.ry;
+      if (nx * nx + ny * ny <= 1) return 0.72;
+    }
+    return 1;
+  },
+
+  /* 陆地/塔推挤：船会被陆地阻挡 */
   landResolve(u) {
     for (const l of LAND) {
       const mx = l.rx + u.rad * 0.6, my = l.ry + u.rad * 0.6;
@@ -96,6 +124,13 @@ const Game = {
     this._refreshShields();
 
     this.minions = [];
+    this.mines = [];
+    this.hazards = [];
+    this.waveTier = 0;
+    this.teamBuffs = { 0: {}, 1: {} };
+    this.beacons = BEACONS.map(b => ({ x: b.x, y: b.y, r: b.r, team: null, prog: 0, t: rand(0, 6) }));
+    this.chests = [];
+    this.chestT = 18;
     this.floats = [];
     this.spawnTick = 1.5;
     this.spawnIdx = 0;
@@ -105,7 +140,8 @@ const Game = {
     Particles.clear();
 
     this.cam.x = 0;
-    this.cam.y = clamp(this.player.y - View.h * 0.5, 0, WORLD.h - View.h);
+    const vh0 = View.h / Settings.zoom;
+    this.cam.y = clamp(this.player.y - vh0 * 0.5, 0, Math.max(0, WORLD.h - vh0));
   },
 
   start() {
@@ -126,6 +162,24 @@ const Game = {
     this._toggles();
     if (this.frozen()) return;
 
+    const rdt = dt;
+    // 击沉特写：短暂的慢动作 + 镜头震动
+    if (this.slowmo > 0) {
+      this.slowmo = Math.max(0, this.slowmo - rdt);
+      dt = dt * 0.4;
+    }
+    this.shake = Math.max(0, this.shake - rdt * 1.6);
+    this.zoomKick = Math.max(0, this.zoomKick - rdt * 0.22);
+
+    // 环境音：海浪底噪 + 风暴雷声
+    this.ambientT -= rdt;
+    if (this.ambientT <= 0) {
+      this.ambientT = rand(6, 11);
+      const k = Weather.type === 'storm' ? 1.4 : (Weather.type === 'clear' ? 0.6 : 1.0);
+      AudioFX.ambient(k);
+      if (Weather.type === 'storm' && Math.random() < 0.45) AudioFX.thunder();
+    }
+
     this.time += dt;
 
     // 基地持续自动生成护航舰
@@ -139,6 +193,13 @@ const Game = {
     for (const t of this.towers) t.update(dt, this);
     for (const m of this.minions) m.update(dt, this);
     for (const m of this.monsters) m.update(dt, this);
+    this._updateMines(dt);
+    this._updateBuffs(dt);
+    this._updateBeacons(dt);
+    this._updateChests(dt);
+    this._updatePing(dt);
+    this._updateHazards(dt);
+    Ambient.update(dt, this);
     this.minions = this.minions.filter(m => !m.dead);
     this._refreshShields();
 
@@ -151,13 +212,15 @@ const Game = {
       if (f.life <= 0) this.floats.splice(i, 1);
     }
 
-    // 相机跟随玩家（纵向四屏大地图，横/竖屏视口自适应）
-    const targetY = clamp(this.player.y - View.h * 0.5, 0, WORLD.h - View.h);
+    // 相机跟随玩家（五屏大地图 + 视野缩放：可见世界区 = 视口 / 缩放）
+    const vw = View.w / Settings.zoom, vh = View.h / Settings.zoom;
+    const targetY = vh >= WORLD.h ? (WORLD.h - vh) * 0.5 : clamp(this.player.y - vh * 0.5, 0, WORLD.h - vh);
     this.cam.y = lerp(this.cam.y, targetY, clamp(dt * 6, 0, 1));
-    const targetX = clamp(this.player.x - View.w * 0.5, 0, WORLD.w - View.w);
+    const targetX = vw >= WORLD.w ? (WORLD.w - vw) * 0.5 : clamp(this.player.x - vw * 0.5, 0, WORLD.w - vw);
     this.cam.x = lerp(this.cam.x, targetX, clamp(dt * 6, 0, 1));
 
     UI.refresh();
+    this._dockProximity();
   },
 
   _toggles() {
@@ -168,24 +231,125 @@ const Game = {
     one('KeyM', () => { AudioFX.muted = !AudioFX.muted; AudioFX.applyMute(); UI._syncSoundUI(); });
     one('KeyC', () => { if (this.state === 'playing') this.cheatMoney(); });
     one('KeyQ', () => { if (this.state === 'playing') this.useSkill(); });
+    one('KeyE', () => { if (this.state === 'playing') this.useItem(0); });
+    one('KeyR', () => { if (this.state === 'playing') this.useItem(1); });
   },
 
-  frozen() { return this.state !== 'playing' || this.paused || UI.dockOpen || UI.settingsOpen; },
+  frozen() { return this.state !== 'playing' || this.paused || UI.anyOverlay(); },
+
+  /* 靠近己方船坞：提示可购买道具/升级（手机点按钮打开船坞） */
+  _dockProximity() {
+    const p = this.player;
+    const own = this.baseOf(0);
+    const near = !!(p && !p.dead && own && !own.dead && dist(p.x, p.y, own.x, own.y) < 430);
+    UI.showDockHint(near && !UI.anyOverlay() && this.state === 'playing');
+  },
 
   _spawnMinions(dt) {
+    // 兵线成长：每 5 分钟全体护航舰强化
+    const tier = Math.floor(this.time / MINION_GROW_T);
+    if (tier > this.waveTier) {
+      this.waveTier = tier;
+      UI.announce(`⚔ 兵线强化 ${tier} 级：护航舰全体变强！`, true);
+      UI.toast('双方补给出兵升级：护航舰血量与火力提升', 2.4);
+      AudioFX.wave();
+    }
     for (const b of this.bases) {
       if (b.dead) continue;
       b.spawnT = (b.spawnT === undefined ? 2.0 : b.spawnT) - dt;
       if (b.spawnT <= 0) {
         b.spawnT = MOBA.minionInterval;
         const teamCount = this.minions.reduce((n, m) => n + (m.team === b.team ? 1 : 0), 0);
-        // 出兵量：基本 1 只，30% 概率一次 2 只（受上限约束）
-        const wave = Math.random() < 0.3 ? 2 : 1;
-        for (let k2 = 0; k2 < wave && teamCount + k2 < MOBA.minionCap; k2++) {
-          const type = minionTypeFor(this.spawnIdx++);
-          this.minions.push(new Minion(this, b.team, (Math.random() * LANES.length) | 0, type));
+        // 波次：常规波 1 只（30% 双只），每 4 波来一次“大队”（3 只 + 旗船/水雷船）
+        b.wave = (b.wave === undefined ? 0 : b.wave) + 1;
+        const big = b.wave % MINION_BIGWAVE === 0;
+        const plan = big ? MINION_BIGWAVE_PLAN : [MINION_WAVE[b.wave % MINION_WAVE.length]];
+        if (big && b.team === 0) {
+          UI.announce('⚓ 我方大队护航舰出击！', true);
+          AudioFX.wave();
+        }
+        for (let k2 = 0; k2 < plan.length; k2++) {
+          if (teamCount + k2 >= MOBA.minionCap) break;
+          this.minions.push(new Minion(this, b.team, (Math.random() * LANES.length) | 0, plan[k2]));
+        }
+        if (!big && Math.random() < 0.3 && teamCount + 1 < MOBA.minionCap) {
+          this.minions.push(new Minion(this, b.team, (Math.random() * LANES.length) | 0, 'sloop'));
         }
       }
+    }
+  },
+
+  /* ---- 水雷（水雷船布设，触敌引爆） ---- */
+  addMine(src) {
+    if (this.mines.length > 60) this.mines.shift();
+    const dir = src.team === 0 ? 1 : -1;
+    this.mines.push({
+      x: src.x + rand(-16, 16), y: src.y + dir * 26,
+      team: src.team, t: 0, arm: 1.2, life: 32, r: 34,
+    });
+  },
+
+  _updateMines(dt) {
+    for (let i = this.mines.length - 1; i >= 0; i--) {
+      const mi = this.mines[i];
+      mi.t += dt; mi.life -= dt;
+      if (mi.life <= 0) { this.mines.splice(i, 1); continue; }
+      if (mi.t < mi.arm) continue;
+      for (const u of this.units) {
+        if (u.dead || u.invuln || u.team === mi.team || u.team === 2) continue;
+        if (dist(mi.x, mi.y, u.x, u.y) < mi.r + (u.rad || 10)) {
+          u.hitBy(72, mi.x, mi.y, this, null);
+          Particles.explosion(mi.x, mi.y, 48, '#ff9d4d');
+          Particles.splash(mi.x, mi.y, 1.4);
+          AudioFX.explosion(true);
+          this.mines.splice(i, 1);
+          break;
+        }
+      }
+    }
+  },
+
+  _drawMines(ctx) {
+    for (const mi of this.mines) {
+      const armed = mi.t >= mi.arm;
+      const blink = 0.5 + 0.5 * Math.sin(mi.t * 6 + mi.x);
+      // 敌我区分：我方用队伍蓝 + 绿灯，敌方用红 + 红灯
+      const mine1 = mi.team === 0;
+      const shell = mine1 ? '#26343f' : '#3a2426';
+      const shellHi = mine1 ? '#3f5866' : '#5e3236';
+      const glow = mine1 ? '#7ef0a0' : '#ff6a5a';
+      const ring = mine1 ? TEAM[0].color : TEAM[1].color;
+      ctx.save();
+      ctx.translate(mi.x, mi.y);
+      // 归属色水圈（一眼分辨敌我）
+      ctx.globalAlpha = 0.30 + blink * 0.12;
+      ctx.strokeStyle = ring; ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.arc(0, 0, 15, 0, TAU); ctx.stroke();
+      // 雷体
+      ctx.globalAlpha = 0.95;
+      ctx.fillStyle = shell;
+      ctx.beginPath(); ctx.arc(0, 0, 9, 0, TAU); ctx.fill();
+      ctx.fillStyle = shellHi;
+      ctx.beginPath(); ctx.arc(-2, -2, 5, 0, TAU); ctx.fill();
+      // 触角
+      ctx.strokeStyle = mine1 ? '#1b252c' : '#2a1a1c';
+      ctx.lineWidth = 2;
+      for (let k = 0; k < 6; k++) {
+        const a = (k / 6) * TAU + mi.t * 0.4;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a) * 8, Math.sin(a) * 8);
+        ctx.lineTo(Math.cos(a) * 13, Math.sin(a) * 13);
+        ctx.stroke();
+      }
+      // 指示灯（布设完成后按归属色闪）
+      ctx.globalAlpha = armed ? 0.35 + blink * 0.65 : 0.25;
+      ctx.fillStyle = armed ? glow : '#ffd76a';
+      ctx.beginPath(); ctx.arc(0, 0, 2.8, 0, TAU); ctx.fill();
+      if (armed) {
+        ctx.globalAlpha = blink * 0.35;
+        ctx.beginPath(); ctx.arc(0, 0, 6, 0, TAU); ctx.fill();
+      }
+      ctx.restore();
     }
   },
 
@@ -228,23 +392,386 @@ const Game = {
     }
   },
 
-  /* ---- 野区 Boss 击杀结算（赏金已在斩杀结算中发放，这里解锁装备） ---- */
+  /* ---- 毒雾区域（九头蛇毒雾弹落点）：持续伤害 + 区域封锁 ---- */
+  addHazard(x, y, r, dur, dps, owner) {
+    this.hazards.push({ x, y, r, t: dur, max: dur, dps, owner, seed: Math.random() * 100 });
+  },
+
+  _updateHazards(dt) {
+    for (let i = this.hazards.length - 1; i >= 0; i--) {
+      const h = this.hazards[i];
+      h.t -= dt;
+      if (h.t <= 0) { this.hazards.splice(i, 1); continue; }
+      // 冒泡（毒雾视觉）
+      if (Math.random() < dt * 6) {
+        Particles.spawn({
+          type: 'smoke', layer: 'low',
+          x: h.x + rand(-h.r * 0.7, h.r * 0.7), y: h.y + rand(-h.r * 0.6, h.r * 0.6),
+          vx: rand(-5, 5), vy: rand(-16, -6),
+          life: rand(0.6, 1.2), max: 1.2, size: rand(4, 9), grow: 7,
+          color: '#5aa86a', drag: 0.95,
+        });
+      }
+      // 伤害：毒云伤双方舰船（不伤中立与宝箱）
+      for (const u of this.units) {
+        if (u.dead || u.invuln || u.team === 2 || u.isChest) continue;
+        if (dist(h.x, h.y, u.x, u.y) > h.r + (u.rad || 8)) continue;
+        u.hitBy(h.dps * dt, undefined, undefined, this, h.owner || null);
+      }
+    }
+  },
+
+  _drawHazards(ctx) {
+    for (const h of this.hazards) {
+      const k = clamp(h.t / h.max, 0, 1);
+      const pulse = 0.5 + 0.5 * Math.sin(h.seed + this.time * 2.2);
+      ctx.save();
+      // 毒雾底盘
+      const g = ctx.createRadialGradient(h.x, h.y, h.r * 0.15, h.x, h.y, h.r);
+      g.addColorStop(0, `rgba(96,190,112,${0.30 * k + 0.10})`);
+      g.addColorStop(0.65, `rgba(70,160,96,${0.22 * k})`);
+      g.addColorStop(1, 'rgba(60,140,90,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(h.x, h.y, h.r, 0, TAU); ctx.fill();
+      // 边界气泡环
+      ctx.globalAlpha = 0.35 * k + pulse * 0.15;
+      ctx.strokeStyle = '#8fe0a0';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([10, 9]);
+      ctx.lineDashOffset = -this.time * 26;
+      ctx.beginPath(); ctx.arc(h.x, h.y, h.r * (0.9 + pulse * 0.08), 0, TAU); ctx.stroke();
+      ctx.setLineDash([]);
+      // 内部毒泡
+      ctx.globalAlpha = 0.25 * k;
+      ctx.fillStyle = '#bff2c4';
+      for (let i = 0; i < 7; i++) {
+        const a = h.seed + i * 0.9 + this.time * 0.7;
+        const rr = h.r * (0.2 + ((i * 37) % 60) / 100);
+        const bx = h.x + Math.cos(a) * rr;
+        const by = h.y + Math.sin(a * 1.3) * rr * 0.7;
+        ctx.beginPath(); ctx.arc(bx, by, 3 + (i % 3), 0, TAU); ctx.fill();
+      }
+      ctx.restore();
+    }
+  },
+
+  /* ---- 玩家指令标记（给 AI 队友发信号） ---- */
+  /* 点击小地图 → 转成世界坐标发指令 */
+  minimapPing(px, py) {
+    const r = this._mmRect;
+    if (!r) return false;
+    if (px < r.mx - 6 || px > r.mx + r.mw + 6 || py < r.my - 6 || py > r.my + r.mh + 6) return false;
+    this.sendPing((px - r.mx) / r.sx, (py - r.my) / r.sy);
+    return true;
+  },
+
+  sendPing(wx, wy, type) {
+    const t = type || Settings.pingType || 'gather';
+    const def = PINGS.find(p => p.id === t) || PINGS[0];
+    this.ping = { x: clamp(wx, 0, WORLD.w), y: clamp(wy, 0, WORLD.h), type: def.id, t: 2.6, born: 0 };
+    UI.toast(`📣 ${def.icon} ${def.name}：${def.desc}`, 1.6);
+    AudioFX.wave();
+  },
+
+  _updatePing(dt) {
+    if (this.ping) {
+      this.ping.t -= dt;
+      this.ping.born += dt;
+      if (this.ping.t <= 0) this.ping = null;
+    }
+  },
+
+  _drawPing(ctx) {
+    const p = this.ping;
+    if (!p) return;
+    const def = PINGS.find(x => x.id === p.type) || PINGS[0];
+    const k = clamp(p.born / 0.6, 0, 1);
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    // 扩散圆环
+    for (let i = 0; i < 3; i++) {
+      const rr = 12 + ((p.born * 46 + i * 24) % 72);
+      ctx.globalAlpha = clamp(0.55 * (1 - rr / 84) * (p.t / 2.6 + 0.3), 0, 0.8);
+      ctx.strokeStyle = def.color;
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(0, 0, rr, 0, TAU); ctx.stroke();
+    }
+    // 中心图标
+    ctx.globalAlpha = clamp(p.t / 1.2, 0, 1);
+    ctx.font = 'bold 22px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(def.icon, 0, 8);
+    ctx.restore();
+  },
+
+  /* ---- 野区 Boss 击杀结算（赏金已在斩杀结算中发放，这里解锁装备 + 团队增益） ---- */
   onBossDeath(m, killer) {
     const team = killer && killer.team !== undefined && killer.team !== 2 ? killer.team : 0;
-    // 同时记录 装备id 与 Boss类型 两个键，解锁查询两路都通
-    this.unlocks[team][m.reward] = true;
-    this.unlocks[team][m.type] = true;
-    UI.announce(`${m.name} 被击败！解锁「${WEAPONS[m.reward].name}」`, true);
-    UI.toast(`野区奖励：已解锁特殊装备「${WEAPONS[m.reward].name}」！去船坞装备吧`, 3.0);
+    if (m.reward && WEAPONS[m.reward]) {
+      // 同时记录 装备id 与 Boss类型 两个键，解锁查询两路都通
+      this.unlocks[team][m.reward] = true;
+      this.unlocks[team][m.type] = true;
+      UI.announce(`${m.name} 被击败！解锁「${WEAPONS[m.reward].name}」`, true);
+      UI.toast(`野区奖励：已解锁特殊装备「${WEAPONS[m.reward].name}」！去船坞装备吧`, 3.0);
+    } else {
+      UI.announce(`${m.name} 被击败！`, true);
+    }
+    if (m.buff && TEAM_BUFFS[m.buff]) this.grantBuff(team, m.buff, `击败 ${m.name}`);
     AudioFX.coin();
   },
 
-  // 英雄被击沉的屏幕中央播报
+  /* ---- 团队增益 ---- */
+  grantBuff(team, id, reason) {
+    const def = TEAM_BUFFS[id];
+    if (!def) return;
+    this.teamBuffs[team][id] = def.dur;
+    const who = team === 0 ? '我方' : '敌方';
+    UI.toast(`${def.icon} ${who}获得「${def.name}」：${def.desc}（${def.dur}s）`, 2.6);
+    if (reason) UI.announce(`${def.icon} ${who}·${def.name}（${reason}）`, team === 0);
+    AudioFX.upgrade();
+    this._buffVer = (this._buffVer || 0) + 1;
+  },
+
+  buffOn(team, id) { return (this.teamBuffs[team] && this.teamBuffs[team][id] > 0); },
+  _updateBuffs(dt) {
+    for (const team of [0, 1]) {
+      const b = this.teamBuffs[team];
+      for (const k in b) {
+        b[k] -= dt;
+        if (b[k] <= 0) delete b[k];
+      }
+    }
+  },
+  /* 灯塔带来的全队航速加成 */
+  beaconSpeedMul(team) {
+    let n = 0;
+    for (const bc of this.beacons) if (bc.team === team) n++;
+    return 1 + BEACON.speedPer * n;
+  },
+
+  /* ---- 中立灯塔：站桩占领，全队加速 + 范围治疗 ---- */
+  _updateBeacons(dt) {
+    for (const bc of this.beacons) {
+      bc.t = (bc.t || 0) + dt;
+      let c0 = 0, c1 = 0;
+      for (const u of this.heroes.concat(this.minions)) {
+        if (u.dead) continue;
+        if (dist(bc.x, bc.y, u.x, u.y) > bc.r) continue;
+        if (u.team === 0) c0++; else c1++;
+      }
+      const solo = (c0 > 0) !== (c1 > 0);            // 仅一方在场才推进
+      if (solo) {
+        const team = c0 > 0 ? 0 : 1;
+        const rate = dt / BEACON.captureTime * Math.min(2, Math.max(c0, c1));
+        if (bc.team === team) {
+          bc.prog = 1;
+        } else {
+          bc.prog = (bc.prog || 0) + rate;
+          if (bc.prog >= 1) {
+            bc.team = team;
+            bc.prog = 1;
+            UI.announce(`🗼 ${team === 0 ? '我方' : '敌方'}占领了灯塔！全队航速提升`, team === 0);
+            AudioFX.wave();
+          }
+        }
+      } else if (!solo) {
+        // 争夺中：进度缓慢回落
+        bc.prog = Math.max(0, (bc.prog || 0) - dt * 0.05);
+        if (bc.prog === 0 && bc.team !== null && bc.team !== undefined) {
+          // 无人占领时不清空归属，只是不再推进
+        }
+      }
+      // 治疗范围内友军
+      if (bc.team === 0 || bc.team === 1) {
+        for (const u of this.heroes) {
+          if (u.dead || u.team !== bc.team) continue;
+          if (dist(bc.x, bc.y, u.x, u.y) > BEACON.healR) continue;
+          if (u.hp < u.maxHp) u.hp = Math.min(u.maxHp, u.hp + BEACON.heal * dt);
+        }
+      }
+    }
+  },
+
+  /* ---- 海底宝箱 ---- */
+  _updateChests(dt) {
+    this.chestT = (this.chestT === undefined ? 18 : this.chestT) - dt;
+    if (this.chestT <= 0) {
+      this.chestT = CHEST.keep;
+      if (this.chests.filter(c => !c.dead).length < CHEST.max) {
+        const spot = CHEST_SPOTS[(Math.random() * CHEST_SPOTS.length) | 0];
+        if (!this.chests.some(c => !c.dead && dist(c.x, c.y, spot.x, spot.y) < 120)) {
+          this.chests.push(this._makeChest(spot.x, spot.y));
+        }
+      }
+    }
+    for (const cu of this.chests) {
+      if (cu.dead) continue;
+      cu.t += dt;
+      cu.life -= dt;
+      if (cu.life <= 0) { cu.dead = true; Particles.splash(cu.x, cu.y, 1); }
+    }
+    this.chests = this.chests.filter(c => !c.dead);
+  },
+
+  _makeChest(x, y) {
+    const chest = {
+      x, y, rad: CHEST.rad, maxHp: CHEST.hp, hp: CHEST.hp,
+      dead: false, isChest: true, team: 2, t: 0, life: 150, flash: 0,
+      hitBy(dmg, ix, iy, game, killer) {
+        if (this.dead) return;
+        this.hp -= dmg;
+        this.flash = 0.12;
+        if (ix !== undefined) Particles.spark(ix, iy, rand(0, TAU), 4, '#ffd76a');
+        if (this.hp <= 0) {
+          this.hp = 0;
+          this.dead = true;
+          const gold = Math.round(rand(CHEST.gold[0], CHEST.gold[1]));
+          const team = killer && killer.team !== undefined && killer.team !== 2 ? killer.team : 0;
+          if (killer && killer.isHero && !killer.dead) {
+            killer.gold += gold;
+            game.addFloat(this.x, this.y - 26, '+' + gold, '#ffd76a');
+          }
+          const keys = Object.keys(TEAM_BUFFS);
+          game.grantBuff(team, keys[(Math.random() * keys.length) | 0], '开宝箱');
+          Particles.explosion(this.x, this.y, 60, '#ffd76a');
+          Particles.ring(this.x, this.y, 70, 'rgba(255,215,106,0.9)');
+          AudioFX.coin();
+        }
+      },
+    };
+    return chest;
+  },
+
+  _drawChests(ctx) {
+    for (const cu of this.chests) {
+      const bob = Math.sin(cu.t * 2) * 2;
+      const blink = 0.5 + 0.5 * Math.sin(cu.t * 4);
+      ctx.save();
+      ctx.translate(cu.x, cu.y + bob);
+      // 光晕
+      ctx.globalAlpha = 0.25 + blink * 0.25;
+      const g = ctx.createRadialGradient(0, 0, 4, 0, 0, 40);
+      g.addColorStop(0, 'rgba(255,215,106,0.8)');
+      g.addColorStop(1, 'rgba(255,215,106,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(0, 0, 40, 0, TAU); ctx.fill();
+      ctx.globalAlpha = 1;
+      // 箱体
+      ctx.fillStyle = '#7a5330';
+      ctx.fillRect(-16, -10, 32, 20);
+      ctx.fillStyle = '#9a6a3e';
+      ctx.fillRect(-16, -10, 32, 5);
+      ctx.strokeStyle = '#3f2c17'; ctx.lineWidth = 2;
+      ctx.strokeRect(-16, -10, 32, 20);
+      // 金饰 + 锁
+      ctx.fillStyle = '#ffd76a';
+      ctx.fillRect(-16, -3, 32, 3);
+      ctx.fillRect(-3, -8, 6, 16);
+      ctx.fillStyle = '#ffefb0';
+      ctx.beginPath(); ctx.arc(0, 0, 3, 0, TAU); ctx.fill();
+      // 血条（受损后）
+      if (cu.hp < cu.maxHp) {
+        const w = 34, h = 4;
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        ctx.fillRect(-w / 2, -26, w, h);
+        ctx.fillStyle = '#ffd76a';
+        ctx.fillRect(-w / 2, -26, w * clamp(cu.hp / cu.maxHp, 0, 1), h);
+      }
+      if (cu.flash > 0) {
+        ctx.globalAlpha = cu.flash / 0.12 * 0.8;
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+        ctx.strokeRect(-16, -10, 32, 20);
+        ctx.globalAlpha = 1;
+      }
+      ctx.restore();
+    }
+  },
+
+  /* ---- 灯塔绘制：石塔 + 旋转光柱 + 归属旗 + 占领进度环 ---- */
+  _drawBeacons(ctx) {
+    for (const bc of this.beacons) {
+      const col = bc.team === 0 ? TEAM[0].color : (bc.team === 1 ? TEAM[1].color : '#9aa3ac');
+      const pulse = 0.5 + 0.5 * Math.sin((bc.t || 0) * 1.6);
+      ctx.save();
+      ctx.translate(bc.x, bc.y);
+      // 占领范围
+      ctx.globalAlpha = 0.10 + (bc.team === null || bc.team === undefined ? 0.05 : 0);
+      ctx.fillStyle = col;
+      ctx.beginPath(); ctx.arc(0, 0, bc.r, 0, TAU); ctx.fill();
+      ctx.globalAlpha = 0.35;
+      ctx.strokeStyle = col; ctx.lineWidth = 2;
+      ctx.setLineDash([8, 8]);
+      ctx.beginPath(); ctx.arc(0, 0, bc.r, 0, TAU); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+      // 礁石基座 + 塔身
+      ctx.fillStyle = '#5a6157';
+      ctx.beginPath(); ctx.ellipse(0, 14, 34, 16, 0, 0, TAU); ctx.fill();
+      ctx.fillStyle = '#8a917f';
+      ctx.beginPath();
+      ctx.moveTo(-16, 12); ctx.lineTo(-12, -30); ctx.lineTo(12, -30); ctx.lineTo(16, 12);
+      ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = '#3f4640'; ctx.lineWidth = 2; ctx.stroke();
+      // 石纹
+      ctx.strokeStyle = 'rgba(60,70,60,0.5)'; ctx.lineWidth = 1.2;
+      for (let y = -22; y < 10; y += 10) { ctx.beginPath(); ctx.moveTo(-14, y); ctx.lineTo(14, y); ctx.stroke(); }
+      // 灯室 + 旋转光柱
+      ctx.fillStyle = '#3a4152';
+      ctx.fillRect(-11, -42, 22, 13);
+      ctx.fillStyle = `rgba(255,240,180,${0.55 + pulse * 0.45})`;
+      ctx.fillRect(-7, -39, 14, 8);
+      const beam = (bc.t || 0) * 0.6;
+      ctx.globalAlpha = 0.22 + pulse * 0.16;
+      ctx.fillStyle = '#fff3c0';
+      ctx.beginPath();
+      ctx.moveTo(0, -36);
+      ctx.lineTo(Math.cos(beam - 0.18) * 150, -36 + Math.sin(beam - 0.18) * 90);
+      ctx.lineTo(Math.cos(beam + 0.18) * 150, -36 + Math.sin(beam + 0.18) * 90);
+      ctx.closePath(); ctx.fill();
+      ctx.globalAlpha = 1;
+      // 归属旗
+      if (bc.team === 0 || bc.team === 1) {
+        ctx.strokeStyle = '#2a1c0e'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(0, -42); ctx.lineTo(0, -66); ctx.stroke();
+        const fl = Math.sin((bc.t || 0) * 4) * 2;
+        ctx.fillStyle = TEAM[bc.team].color;
+        ctx.beginPath();
+        ctx.moveTo(0, -66); ctx.lineTo(16 + fl, -60); ctx.lineTo(0, -54);
+        ctx.closePath(); ctx.fill();
+      }
+      // 占领进度环
+      if (bc.prog > 0.01 && bc.prog < 1) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(0, -12, 46, -Math.PI / 2, -Math.PI / 2 + TAU * bc.prog);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+  },
+
+  /* ---- 玩家可打的宝箱列表（供武器索敌） ---- */
+  chestsInRange(x, y, range) {
+    const out = [];
+    for (const cu of this.chests) {
+      if (cu.dead) continue;
+      if (dist(x, y, cu.x, cu.y) <= range) out.push(cu);
+    }
+    return out;
+  },
+
+  // 英雄被击沉的屏幕中央播报（含击沉特写：慢动作 + 镜头震动）
   announceHeroDeath(victim, killer) {
     const killerName = killer && killer.name ? killer.name : '海怪';
     const text = `${victim.name} 被 ${killerName} 击沉！`;
     const good = victim.team === 1;   // 敌方英雄阵亡 = 好消息
     UI.announce(text, good);
+    this.slowmo = 0.5;
+    this.shake = good ? 0.9 : 1.15;
+    this.zoomKick = good ? 0.05 : 0.075;
+    Particles.ring(victim.x, victim.y, 90, good ? 'rgba(126,240,160,0.9)' : 'rgba(255,140,110,0.9)');
+    AudioFX.explosion(true);
   },
 
   /* ---- 玩家装备 / 升级（金币在玩家舰上） ---- */
@@ -269,7 +796,8 @@ const Game = {
     const s = this.player.slots[slotIndex];
     const maxLv = weaponMaxLevel(s.weaponId);
     if (s.level >= maxLv) { UI.toast(maxLv <= 1 ? '该武器无法升级（高性价比入门炮）' : '该武器已满级'); return; }
-    const cost = weaponUpgradeCost(s.weaponId, s.level);
+    // 武器熟练度：同一门炮打得越多，升级越便宜（最多 -35%）
+    const cost = Math.max(20, Math.round(weaponUpgradeCost(s.weaponId, s.level) * this.player.masteryMul(s.weaponId)));
     if (this.player.gold < cost) { UI.toast('金币不足'); return; }
     this.player.gold -= cost;
     s.level++;
@@ -330,6 +858,51 @@ const Game = {
     if (p.tryActivateSkill()) {
       UI.toast(`${p.hullDef.skill.icon} ${p.hullDef.skill.name}！`, 1.2);
     }
+  },
+
+  /* ---- 船长等级 → 天赋三选一（玩家弹面板，AI 自动） ---- */
+  onPlayerLevel(p) {
+    if (p.pendingTalent <= 0) return;
+    const pool = TALENTS.slice();
+    // 随机抽 3 个不同天赋（已点满的仍可出现，作为叠加）
+    const offer = [];
+    while (offer.length < 3 && pool.length) {
+      offer.push(pool.splice((Math.random() * pool.length) | 0, 1)[0]);
+    }
+    UI.announce(`⭐ 船长升到 Lv.${p.level}——选择天赋！`, true);
+    AudioFX.upgrade();
+    UI.openTalents(offer, p.pendingTalent);
+  },
+
+  chooseTalent(id) {
+    const p = this.player;
+    p.applyTalent(id);
+    UI.refresh();
+    if (p.pendingTalent > 0) this.onPlayerLevel(p);
+    else UI.closeTalents();
+  },
+
+  /* ---- 主动道具 ---- */
+  buyItem(slot, id) {
+    const p = this.player;
+    const def = ITEMS[id];
+    if (!def) return;
+    if (p.items[slot] === id) { UI.toast('该道具已在装备栏'); return; }
+    if (p.gold < def.cost) { UI.toast('金币不足'); return; }
+    p.gold -= def.cost;
+    p.items[slot] = id;
+    UI.toast(`已装备道具 ${def.icon} ${def.name}（${slot === 0 ? 'E' : 'R'} 键释放）`, 2.2);
+    AudioFX.upgrade();
+    UI.refresh();
+  },
+
+  useItem(slot) {
+    const p = this.player;
+    if (p.dead) return;
+    const id = p.items[slot];
+    if (!id) { UI.toast('该道具栏为空（船坞里购买）'); return; }
+    if (p.itemCd[slot] > 0) { UI.toast(`道具冷却中 ${Math.ceil(p.itemCd[slot])}s`); return; }
+    if (p.useItem(slot, this)) UI.toast(`${ITEMS[id].icon} ${ITEMS[id].name}！`, 1.1);
   },
 
   upgradeModule(kind) {
@@ -400,26 +973,39 @@ const Game = {
   render() {
     const ctx = Render.ctx;
     ctx.save();
-    // 世界坐标 -> 相机偏移
-    ctx.translate(-Math.round(this.cam.x), -Math.round(this.cam.y));
+    // 世界坐标 -> 相机偏移（含视野缩放 + 击沉特写震动/轻推）
+    const sh = this.shake;
+    const ox = sh > 0 ? rand(-1, 1) * sh * 13 : 0;
+    const oy = sh > 0 ? rand(-1, 1) * sh * 13 : 0;
+    const z = Settings.zoom * (1 + this.zoomKick);
+    ctx.scale(z, z);
+    ctx.translate(-Math.round(this.cam.x + ox), -Math.round(this.cam.y + oy));
 
     Water.draw(ctx);
     Map.draw(ctx, this);
+    this._drawBeacons(ctx);
+    this._drawMines(ctx);                 // 水雷贴在水面，位于所有单位之下
+    this._drawHazards(ctx);               // 毒雾区域（九头蛇）
     Particles.draw(ctx, 'low');
+    Ambient.draw(ctx, 'low');
     for (const t of this.towers) t.draw(ctx);
     for (const m of this.monsters) m.draw(ctx);
+    this._drawChests(ctx);
     for (const m of this.minions) m.draw(ctx);
     for (const h of this.heroes) h.draw(ctx, h === this.player);
     Projectiles.draw(ctx);
+    Ambient.draw(ctx, 'high');            // 海鸥在船之上飞过
     Particles.draw(ctx, 'high');
+    this._drawPing(ctx);
     this._drawFloats(ctx);
 
     ctx.restore();
 
-    // 屏幕空间：暗角 / 小地图 / 武器冷却面板 / 摇杆 / 暂停
+    // 屏幕空间：暗角 / 天候 / 小地图 / 武器冷却面板 / 摇杆 / 暂停
     Map._vignette(ctx, View.w, View.h);
+    if (typeof Weather !== 'undefined') Water.drawWeatherOverlay(ctx, View.w, View.h);
     this._drawMinimap(ctx);
-    if (this.state === 'playing' && !UI.dockOpen) this._drawWeaponStatus(ctx);
+    if (this.state === 'playing' && !UI.anyOverlay()) this._drawWeaponStatus(ctx);
     this._drawJoystick(ctx);
 
     if (this.paused && this.state === 'playing') {
@@ -431,22 +1017,76 @@ const Game = {
     }
   },
 
-  // 移动端虚拟摇杆（方型底座）
+  // 移动端虚拟摇杆（柔和光晕底盘 + 刻度环 + 渐变摇杆头 + 方向箭头）
   _drawJoystick(ctx) {
     const j = Input.joystickDraw();
     if (!j) return;
+    const r = j.r;
+    const dx0 = j.kx - j.cx, dy0 = j.ky - j.cy;
+    const dl = Math.hypot(dx0, dy0);
+    const power = clamp(dl / r, 0, 1);
     ctx.save();
-    ctx.globalAlpha = 0.35;
-    ctx.fillStyle = '#06283e';
-    cla(ctx, j.cx, j.cy, j.r);
-    ctx.globalAlpha = 0.5;
-    ctx.strokeStyle = '#9adcff'; ctx.lineWidth = 2;
-    ctx.save(); ctx.translate(j.cx, j.cy); ctx.rotate(Math.PI / 4);
-    ctx.strokeRect(-j.r, -j.r, j.r * 2, j.r * 2);
-    ctx.restore();
-    ctx.globalAlpha = 0.6;
-    ctx.fillStyle = '#cfeaff';
-    ctx.fillRect(j.kx - j.r * 0.3, j.ky - j.r * 0.3, j.r * 0.6, j.r * 0.6);
+
+    // 底盘光晕
+    const g = ctx.createRadialGradient(j.cx, j.cy, r * 0.15, j.cx, j.cy, r * 1.3);
+    g.addColorStop(0, 'rgba(12,44,70,0.46)');
+    g.addColorStop(0.7, 'rgba(8,30,48,0.3)');
+    g.addColorStop(1, 'rgba(8,30,48,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(j.cx, j.cy, r * 1.3, 0, TAU); ctx.fill();
+
+    // 双层外环
+    ctx.strokeStyle = `rgba(154,220,255,${0.35 + power * 0.35})`;
+    ctx.lineWidth = 2.2;
+    ctx.beginPath(); ctx.arc(j.cx, j.cy, r, 0, TAU); ctx.stroke();
+    ctx.strokeStyle = 'rgba(154,220,255,0.18)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.arc(j.cx, j.cy, r * 0.76, 0, TAU); ctx.stroke();
+
+    // 八向刻度
+    ctx.lineWidth = 1.6;
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * TAU;
+      ctx.strokeStyle = `rgba(200,240,255,${i % 2 ? 0.2 : 0.42})`;
+      ctx.beginPath();
+      ctx.moveTo(j.cx + Math.cos(a) * r * 0.87, j.cy + Math.sin(a) * r * 0.87);
+      ctx.lineTo(j.cx + Math.cos(a) * r * 0.98, j.cy + Math.sin(a) * r * 0.98);
+      ctx.stroke();
+    }
+
+    // 方向指示扇（拖动方向）
+    if (dl > 3) {
+      const a = Math.atan2(dy0, dx0);
+      ctx.globalAlpha = 0.18 + power * 0.22;
+      ctx.fillStyle = '#9adcff';
+      ctx.beginPath();
+      ctx.moveTo(j.cx, j.cy);
+      ctx.arc(j.cx, j.cy, r * 0.86, a - 0.42, a + 0.42);
+      ctx.closePath(); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    // 摇杆头（渐变球 + 高光 + 描边）
+    const kg = ctx.createRadialGradient(j.kx - r * 0.18, j.ky - r * 0.22, 2, j.kx, j.ky, r * 0.54);
+    kg.addColorStop(0, 'rgba(232,250,255,0.96)');
+    kg.addColorStop(0.5, 'rgba(146,212,242,0.9)');
+    kg.addColorStop(1, 'rgba(54,118,158,0.72)');
+    ctx.fillStyle = kg;
+    ctx.beginPath(); ctx.arc(j.kx, j.ky, r * 0.5, 0, TAU); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.62)';
+    ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.arc(j.kx, j.ky, r * 0.5, 0, TAU); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.beginPath(); ctx.arc(j.kx - r * 0.15, j.ky - r * 0.17, r * 0.12, 0, TAU); ctx.fill();
+
+    // 拖动力度环（围绕摇杆头的一圈进度）
+    if (power > 0.02) {
+      ctx.strokeStyle = 'rgba(255,215,106,0.75)';
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.arc(j.kx, j.ky, r * 0.62, -Math.PI / 2, -Math.PI / 2 + TAU * power);
+      ctx.stroke();
+    }
     ctx.restore();
   },
 
@@ -521,6 +1161,7 @@ const Game = {
     const mw = 66, mh = Math.round(mw * WORLD.h / WORLD.w);   // 约 139
     const mx = View.w - mw - 14, my = 66;
     const sx = mw / WORLD.w, sy = mh / WORLD.h;
+    this._mmRect = { mx, my, mw, mh, sx, sy };   // 供点击小地图发指令
 
     ctx.save();
     ctx.fillStyle = 'rgba(4, 22, 38, 0.82)';
@@ -568,6 +1209,36 @@ const Game = {
       ctx.globalAlpha = 0.75;
       ctx.fillRect(mx + m.x * sx - 1.5, my + m.y * sy - 1.5, 3, 3);
     }
+    // 水雷（橙点）
+    ctx.fillStyle = '#ff9d4d';
+    for (const mi of this.mines) {
+      ctx.globalAlpha = 0.7;
+      ctx.fillRect(mx + mi.x * sx - 1, my + mi.y * sy - 1, 2, 2);
+    }
+    // 灯塔（圈 + 归属色）
+    for (const bc of this.beacons) {
+      ctx.globalAlpha = 0.9;
+      ctx.strokeStyle = bc.team === 0 ? TEAM[0].color : (bc.team === 1 ? TEAM[1].color : '#cfd8e0');
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.arc(mx + bc.x * sx, my + bc.y * sy, 4.5, 0, TAU);
+      ctx.stroke();
+      if (bc.prog > 0.02 && bc.prog < 1) {
+        ctx.fillStyle = '#fff';
+        ctx.beginPath();
+        ctx.moveTo(mx + bc.x * sx, my + bc.y * sy - 3);
+        ctx.lineTo(mx + bc.x * sx + 3, my + bc.y * sy + 2);
+        ctx.lineTo(mx + bc.x * sx - 3, my + bc.y * sy + 2);
+        ctx.closePath(); ctx.fill();
+      }
+    }
+    // 宝箱（金点）
+    ctx.fillStyle = '#ffd76a';
+    for (const cu of this.chests) {
+      ctx.globalAlpha = 0.9;
+      ctx.fillRect(mx + cu.x * sx - 1.5, my + cu.y * sy - 1.5, 3, 3);
+    }
+    ctx.globalAlpha = 1;
     // 英雄（方块）
     ctx.globalAlpha = 1;
     for (const hcp of this.heroes) {
@@ -584,7 +1255,7 @@ const Game = {
     ctx.lineWidth = 1;
     ctx.strokeRect(
       mx + this.cam.x * sx, my + this.cam.y * sy,
-      View.w * sx, View.h * sy
+      (View.w / Settings.zoom) * sx, (View.h / Settings.zoom) * sy
     );
     ctx.restore();
   },

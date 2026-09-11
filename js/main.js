@@ -45,7 +45,56 @@ function boot() {
   window.addEventListener('resize', () => onResize(canvas));
   window.addEventListener('orientationchange', () => setTimeout(() => onResize(canvas), 200));
 
+  // 版本自检：部署新版本后，已缓存/已打开的页面会自动更新
+  checkVersion(true);
+  const _vTimer = setInterval(() => checkVersion(false), 5 * 60 * 1000);
+  // 无头环境（Node）里不要让定时器阻止进程退出
+  if (_vTimer && typeof _vTimer.unref === 'function') _vTimer.unref();
+
   requestAnimationFrame(loop);
+}
+
+/* ============ 版本自检（防缓存） ============
+ * 1) 用 no-store 抓 version.json（带时间戳参数，绕开浏览器与 CDN 缓存）
+ * 2) 与本页 GAME_VERSION 比对：不一致 → 清 Cache Storage → 带 ?v=新版本 强刷
+ * 3) 30 秒内只强刷一次，避免 CDN 未同步时来回刷新
+ */
+async function checkVersion(verbose) {
+  if (typeof location === 'undefined' || location.protocol === 'file:') return;
+  if (typeof fetch !== 'function') return;
+  try {
+    const res = await fetch(`version.json?t=${Date.now()}`, { cache: 'no-store' });
+    if (!res.ok) return;
+    const data = await res.json();
+    const remote = data && data.version;
+    const local = typeof window !== 'undefined' ? window.GAME_VERSION : null;
+    if (!remote || !local || remote === local) {
+      if (verbose) console.log('[版本] 已是最新：', local);
+      return;
+    }
+    let last = 0;
+    try { last = Number(sessionStorage.getItem('dsh.reloadAt') || 0); } catch (e) { last = 0; }
+    if (Date.now() - last < 30000) return;
+    try { sessionStorage.setItem('dsh.reloadAt', String(Date.now())); } catch (e) { /* 忽略 */ }
+    console.log('[版本] 发现新版本', remote, '（本地', local, '）→ 清理缓存并强刷');
+    try {
+      if (typeof caches !== 'undefined' && caches.keys) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map(k => caches.delete(k)));
+      }
+      if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map(r => r.update()));
+      }
+    } catch (e) { /* 忽略 */ }
+    if (typeof UI !== 'undefined' && UI.toast) UI.toast('发现新版本，正在更新…', 1.6);
+    const url = new URL(location.href);
+    url.searchParams.set('v', remote);
+    setTimeout(() => location.replace(url.toString()), 700);
+  } catch (e) {
+    // 离线 / 未部署 version.json：静默忽略，不影响游玩
+    if (verbose) console.log('[版本] 自检跳过：', e && e.message);
+  }
 }
 
 function onResize(canvas) {
@@ -73,6 +122,13 @@ function loop(ts) {
   if (dt > 0.033) dt = 0.033;
   if (dt < 0) dt = 0;
   if (dt > 0) _fps = _fps * 0.92 + (1 / dt) * 0.08;
+
+  // 视野缩放平滑逼近目标值（滚轮 / 双指 / 设置按钮）
+  if (Math.abs(Settings.zoom - Settings.zoomTarget) > 0.001) {
+    Settings.zoom = lerp(Settings.zoom, Settings.zoomTarget, clamp(dt * 11, 0, 1));
+  } else {
+    Settings.zoom = Settings.zoomTarget;
+  }
 
   Game.update(dt);
   Game.render();

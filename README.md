@@ -85,14 +85,33 @@ AI 行为（守基地/守塔/追击/撤退/推塔/自动升级）在 `ship.js` �
 游戏是**纯静态前端**（无后端、无依赖、路径全相对），上传即可在手机浏览器打开：
 
 1. 上传以下文件到任意静态服务器（宝塔/nginx/Apache/OSS/GitHub Pages 等）：
-   `index.html`、`css/`、`js/`、`README.md`（`_test/` 可不传）
+   `index.html`、`version.json`、`css/`、`js/`、`assets/`（`_test/`、`_gen/`、`_deploy/` 可不传）
 2. 手机浏览器访问 `https://你的域名/` 或 `/index.html` —— 建议**横屏**游玩
 3. 手机适配说明：
    - **视口自适应**：横屏/竖屏都全屏（视口宽高按屏幕比例自动计算，相机 X/Y 双向跟随）
-   - **虚拟摇杆**：在画面上按住拖动即是移动方向（模拟量，带死区）
-   - 右上角新增按钮：🎯 射程（手机没有 Ctrl，用它开关射程圈）、⏸ 暂停
+   - **虚拟摇杆**：在画面上按住拖动即是移动方向（模拟量，带死区）；**双指捏合缩放视野**
+   - HUD 按钮：技能 / 道具×2 / 装备 / 修船 / 🎯射程 / 📍指令 / ⏸暂停 / ⚙️设置
    - HUD/战报栏/船坞在小屏下自动换行收缩；已禁用页面缩放/双击放大
 4. 局域网自测：`npx serve .` 或 `python -m http.server 8000`，手机与电脑同一 WiFi 访问电脑 IP 端口
+
+### 部署后玩家自动拿到最新版（防缓存）
+
+玩家点开链接**不会卡在旧版本**，三层保障：
+
+1. **构建版本戳**：发布前跑一次
+   ```bash
+   node _gen/run.js      # 重新生成素材（改了美术才需要）
+   node _gen/stamp.js    # 生成版本号：给 index.html 所有本地资源加 ?v=版本号，并写 version.json + js/version.js
+   ```
+2. **运行时自检**（`js/main.js` `checkVersion`）：启动时与每 5 分钟用 `no-store` 抓 `version.json`，
+   与本页 `GAME_VERSION` 不一致 → 清理 Cache Storage → 提示后带 `?v=新版本` 强刷（30 秒内只刷一次防抖）。
+3. **服务器缓存头**（关键）：把 `_deploy/` 下对应文件放到站点根目录 ——
+   Nginx 用 `nginx.conf.txt`、Apache 用 `.htaccess`、Netlify/Cloudflare Pages/Vercel 用 `_headers`；
+   规则是 **`index.html` 与 `version.json` 不缓存**，`js/`、`css/`、`assets/` 长期缓存（URL 带版本号）。
+   详细说明见 **`_deploy/README.md`**。
+
+> 有 CDN 时记得把 `index.html` / `version.json` 也设为不缓存（或 60 秒内短 TTL），否则 CDN 会继续发旧页面。
+
 
 ## 机制一览
 

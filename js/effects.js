@@ -9,9 +9,15 @@ class WakeTrail {
     this.pts = [];      // {x,y,life,s}
     this.max = max;
   }
+  /* 画质档位：低画质缩短航迹（航迹是逐段描边，最耗性能） */
+  get capMax() {
+    const q = Settings.quality || 'high';
+    return q === 'low' ? Math.round(this.max * 0.35) : (q === 'mid' ? Math.round(this.max * 0.6) : this.max);
+  }
   push(x, y, scale = 1) {
     this.pts.push({ x, y, life: 1, s: scale || 1 });
-    if (this.pts.length > this.max) this.pts.splice(0, this.pts.length - this.max);
+    const cap = this.capMax;
+    if (this.pts.length > cap) this.pts.splice(0, this.pts.length - cap);
   }
   update(dt) {
     for (let i = this.pts.length - 1; i >= 0; i--) {
@@ -19,48 +25,183 @@ class WakeTrail {
       if (this.pts[i].life <= 0) this.pts.splice(i, 1);
     }
   }
+  /* 分桶批量描边：同一寿命区间的段合并成一条 path → 描边次数从 n*3 降到 ≤8 */
   draw(ctx) {
-    const n = this.pts.length;
+    const pts = this.pts, n = pts.length;
     if (n < 2) return;
+    const q = Settings.quality || 'high';
+    const B = q === 'low' ? 2 : (q === 'mid' ? 3 : 4);
     ctx.save();
     ctx.lineCap = 'round';
-    for (let i = n - 1; i >= 1; i--) {
-      const pN = this.pts[i], pO = this.pts[i - 1];   // pN 靠船更近
-      const life = clamp(pN.life, 0, 1);
-      const age = 1 - life;
-      const alpha = Math.pow(life, 1.7) * 0.42;
+    for (let b = 0; b < B; b++) {
+      const lifeHi = 1 - b / B, lifeLo = 1 - (b + 1) / B;
+      const midLife = Math.max(0.001, (lifeHi + lifeLo) * 0.5);
+      const age = 1 - midLife;
+      const alpha = Math.pow(midLife, 1.7) * 0.42;
       if (alpha < 0.02) continue;
-      const dx = pN.x - pO.x, dy = pN.y - pO.y;
-      const L = Math.hypot(dx, dy) || 1;
-      const lx = -dy / L, ly = dx / L;               // 路径法线（跟随转弯）
-      const s = pN.s;
-      const w = (2 + age * (2.5 + 4 * s)) * s;       // 主沫带宽
-      const o = age * age * (12 + 18 * s) * s;       // V 形张角（向后张开）
-      // 主沫带
+      const w = 2 + age * 6.5;
+      // 主沫带（一条 path）
+      let any = false;
       ctx.globalAlpha = alpha;
       ctx.strokeStyle = '#eefdff';
       ctx.lineWidth = w;
-      ctx.beginPath(); ctx.moveTo(pO.x, pO.y); ctx.lineTo(pN.x, pN.y); ctx.stroke();
-      // 两侧V边线
+      ctx.beginPath();
+      for (let i = n - 1; i >= 1; i--) {
+        const pN = pts[i];
+        if (pN.life > lifeHi || pN.life <= lifeLo) continue;
+        const pO = pts[i - 1];
+        ctx.moveTo(pO.x, pO.y); ctx.lineTo(pN.x, pN.y);
+        any = true;
+      }
+      if (any) ctx.stroke();
+      // 两侧 V 形边线（一条 path 两条线）
+      let anyV = false;
       ctx.globalAlpha = alpha * 0.7;
       ctx.lineWidth = Math.max(1, w * 0.45);
-      for (const side of [-1, 1]) {
-        ctx.beginPath();
-        ctx.moveTo(pO.x + lx * o * side, pO.y + ly * o * side);
-        ctx.lineTo(pN.x + lx * o * side, pN.y + ly * o * side);
-        ctx.stroke();
+      ctx.beginPath();
+      for (let i = n - 1; i >= 1; i--) {
+        const pN = pts[i];
+        if (pN.life > lifeHi || pN.life <= lifeLo) continue;
+        const pO = pts[i - 1];
+        const dx = pN.x - pO.x, dy = pN.y - pO.y;
+        const L = Math.hypot(dx, dy) || 1;
+        const lx = -dy / L, ly = dx / L;
+        const s = pN.s;
+        const o = age * age * (12 + 18 * s) * s;
+        for (const side of [-1, 1]) {
+          ctx.moveTo(pO.x + lx * o * side, pO.y + ly * o * side);
+          ctx.lineTo(pN.x + lx * o * side, pN.y + ly * o * side);
+        }
+        anyV = true;
       }
+      if (anyV) ctx.stroke();
     }
     ctx.restore();
   }
 }
 
-/* 通用粒子池 */
+/* 海洋生物点缀（海鸥 / 跃鱼 / 远鲸）：纯装饰，随镜头刷新 */
+const Ambient = {
+  list: [],
+  t: 3,
+  update(dt, game) {
+    if ((Settings.quality || 'high') === 'low') { this.list.length = 0; return; }
+    this.t -= dt;
+    if (this.t <= 0) {
+      this.t = rand(3.5, 8.5);
+      const vw = View.w / Settings.zoom, vh = View.h / Settings.zoom;
+      const cx = game.cam.x + vw * Math.random();
+      const cy = game.cam.y + vh * Math.random();
+      const roll = Math.random();
+      if (roll < 0.55) {
+        this.list.push({ kind: 'gull', x: cx - vw * 0.4, y: cy, vx: rand(70, 130), vy: rand(-18, 18), t: 0, life: rand(5, 9), s: rand(0.8, 1.3), flap: rand(0, 6) });
+      } else if (roll < 0.85) {
+        this.list.push({ kind: 'fish', x: cx, y: cy, t: 0, life: 1.5, s: rand(0.8, 1.25), ang: rand(0, TAU) });
+      } else {
+        this.list.push({ kind: 'whale', x: cx - vw * 0.3, y: cy, vx: rand(18, 36), vy: rand(-8, 8), t: 0, life: rand(8, 12), s: rand(1.6, 2.4) });
+      }
+    }
+    for (let i = this.list.length - 1; i >= 0; i--) {
+      const a = this.list[i];
+      a.t += dt;
+      a.x += (a.vx || 0) * dt;
+      a.y += (a.vy || 0) * dt;
+      if (a.t >= a.life) {
+        if (a.kind === 'fish') Particles.splash(a.x, a.y, 0.8);
+        this.list.splice(i, 1);
+      }
+    }
+  },
+  draw(ctx, layer = 'low') {
+    for (const a of this.list) {
+      // 分层：海鸥在高空（画在船舰之上），跃鱼/远鲸贴水面（画在船下）
+      const isHigh = a.kind === 'gull';
+      if ((layer === 'high') !== isHigh) continue;
+      const fade = Math.min(1, a.t / 0.6) * Math.min(1, (a.life - a.t) / 0.8);
+      ctx.save();
+      ctx.globalAlpha = clamp(fade, 0, 1);
+      if (a.kind === 'gull') {
+        // 海鸥：水面阴影 + 双翼拍动
+        ctx.globalAlpha *= 0.22;
+        ctx.fillStyle = '#062b45';
+        ctx.beginPath(); ctx.ellipse(a.x + 26, a.y + 12, 11 * a.s, 5 * a.s, 0, 0, TAU); ctx.fill();
+        ctx.globalAlpha = clamp(fade, 0, 1);
+        const flap = Math.sin(a.t * 6 + a.flap) * 6 * a.s;
+        ctx.strokeStyle = '#f2f7fa';
+        ctx.lineWidth = 2 * a.s;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(a.x - 9 * a.s, a.y + flap);
+        ctx.lineTo(a.x, a.y);
+        ctx.lineTo(a.x + 9 * a.s, a.y - flap);
+        ctx.stroke();
+      } else if (a.kind === 'fish') {
+        // 跃鱼：抛物线 + 水花
+        const k = a.t / a.life;
+        const hop = Math.sin(k * Math.PI) * 26 * a.s;
+        ctx.fillStyle = '#cfe6f2';
+        ctx.save();
+        ctx.translate(a.x, a.y - hop);
+        ctx.rotate(Math.sin(k * Math.PI * 2) * 0.5);
+        ctx.beginPath();
+        ctx.ellipse(0, 0, 7 * a.s, 3 * a.s, 0, 0, TAU); ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(-7 * a.s, 0); ctx.lineTo(-13 * a.s, -4 * a.s); ctx.lineTo(-13 * a.s, 4 * a.s);
+        ctx.closePath(); ctx.fill();
+        ctx.restore();
+        if (k < 0.12 || k > 0.88) {
+          ctx.globalAlpha = 0.5;
+          ctx.strokeStyle = '#eafcff';
+          ctx.lineWidth = 1.6;
+          ctx.beginPath(); ctx.ellipse(a.x, a.y, 10 * a.s * (k < 0.12 ? k / 0.12 : (1 - k) / 0.12), 5 * a.s, 0, 0, TAU); ctx.stroke();
+        }
+      } else {
+        // 远鲸：水下阴影 + 尾鳍
+        ctx.globalAlpha *= 0.35;
+        ctx.fillStyle = '#062b45';
+        ctx.beginPath(); ctx.ellipse(a.x, a.y, 46 * a.s, 16 * a.s, 0.1, 0, TAU); ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(a.x - 44 * a.s, a.y);
+        ctx.lineTo(a.x - 62 * a.s, a.y - 12 * a.s);
+        ctx.lineTo(a.x - 62 * a.s, a.y + 12 * a.s);
+        ctx.closePath(); ctx.fill();
+        ctx.globalAlpha = clamp(fade, 0, 1) * 0.25;
+        ctx.fillStyle = '#9adcff';
+        ctx.beginPath(); ctx.ellipse(a.x + 10 * a.s, a.y - 4 * a.s, 16 * a.s, 4 * a.s, 0, 0, TAU); ctx.fill();
+      }
+      ctx.restore();
+    }
+  },
+};
+
+/* 通用粒子池（对象复用 + 画质上限） */
 const Particles = {
   list: [],
-  spawn(p) { this.list.push(p); },
+  _pool: [],
+
+  _cap() {
+    const q = Settings.quality || 'high';
+    return q === 'low' ? 240 : (q === 'mid' ? 520 : 900);
+  },
+  _mul(n) {
+    const q = Settings.quality || 'high';
+    if (q === 'low') return Math.max(1, Math.round(n * 0.45));
+    if (q === 'mid') return Math.max(1, Math.round(n * 0.75));
+    return n;
+  },
+  spawn(p) {
+    if (this.list.length >= this._cap()) return;
+    const obj = this._pool.pop();
+    if (obj) { Object.assign(obj, p); this.list.push(obj); }
+    else this.list.push(p);
+  },
+  _recycle(p) {
+    p.grow = 0; p.drag = 0; p.grav = 0; p.ang = undefined; p.lw = undefined;
+    if (this._pool.length < 700) this._pool.push(p);
+  },
 
   smoke(x, y, n = 4, speed = 20) {
+    n = this._mul(n);
     for (let i = 0; i < n; i++) {
       this.spawn({
         type: 'smoke', layer: 'high',
@@ -74,6 +215,7 @@ const Particles = {
   },
 
   spark(x, y, ang, n = 8, color = '#ffd76a') {
+    n = this._mul(n);
     for (let i = 0; i < n; i++) {
       const a = ang + rand(-0.4, 0.4);
       const s = rand(80, 260);
@@ -87,7 +229,7 @@ const Particles = {
   },
 
   splash(x, y, size = 1) {
-    const n = Math.round(6 * size);
+    const n = Math.max(2, this._mul(Math.round(6 * size)));
     for (let i = 0; i < n; i++) {
       this.spawn({
         type: 'splash', layer: 'low',
@@ -119,7 +261,7 @@ const Particles = {
       size: 6, grow: radius * 1.6, color: 'rgba(255,230,170,0.9)', lw: 4,
     });
     // 碎片
-    const n = big ? 22 : 12;
+    const n = this._mul(big ? 22 : 12);
     for (let i = 0; i < n; i++) {
       const a = rand(0, TAU), s = rand(120, 320);
       this.spawn({
@@ -179,7 +321,11 @@ const Particles = {
     for (let i = L.length - 1; i >= 0; i--) {
       const p = L[i];
       p.life -= dt;
-      if (p.life <= 0) { L.splice(i, 1); continue; }
+      if (p.life <= 0) {
+        L.splice(i, 1);
+        this._recycle(p);
+        continue;
+      }
       p.x += (p.vx || 0) * dt;
       p.y += (p.vy || 0) * dt;
       if (p.drag) { p.vx *= Math.pow(p.drag, dt * 60); p.vy *= Math.pow(p.drag, dt * 60); }
@@ -252,5 +398,5 @@ const Particles = {
     ctx.restore();
   },
 
-  clear() { this.list = []; },
+  clear() { this.list = []; this._pool = []; },
 };

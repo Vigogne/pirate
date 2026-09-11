@@ -1,4 +1,4 @@
-/* tower.js — 防御塔：一塔/二塔，塔不倒基地不破防 */
+﻿/* tower.js — 防御塔：一塔/二塔，塔不倒基地不破防 */
 "use strict";
 
 class Tower {
@@ -44,10 +44,10 @@ class Tower {
     this.t += dt;
     this.flash = Math.max(0, this.flash - dt);
 
-    // 索敌：射程内最近的对立单位（英雄优先；无敌塔不打）
+    // 索敌：射程内最近的对立单位（英雄优先；无敌塔不打；烟幕中的目标不可锁定）
     let target = null, bestHero = Infinity, bestAny = Infinity;
     for (const u of game.units) {
-      if (u.dead || u.invuln || u.team === this.team) continue;
+      if (u.dead || u.invuln || u.isChest || u.team === this.team || u.stealthT > 0) continue;
       const d = dist(this.x, this.y, u.x, u.y);
       if (d <= TOWER_DEF.range) {
         if (u.isHero) { if (d < bestHero) { bestHero = d; target = u; } }
@@ -56,7 +56,7 @@ class Tower {
     }
     if (!target && bestAny < Infinity) {
       for (const u of game.units) {
-        if (u.dead || u.invuln || u.team === this.team || u.isHero) continue;
+        if (u.dead || u.invuln || u.isChest || u.team === this.team || u.isHero || u.stealthT > 0) continue;
         const d = dist(this.x, this.y, u.x, u.y);
         if (d <= TOWER_DEF.range && d === bestAny) { target = u; break; }
       }

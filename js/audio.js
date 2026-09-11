@@ -76,6 +76,16 @@ const AudioFX = {
   harpoon() { if (this.muted||!this.ctx) return; this._tone(700, 0.12, 0.22, 'sawtooth', 300); },
   flame() { if (this.muted||!this.ctx) return; this._noise(0.12, 0.16, 1400, 'bandpass'); },
   hit() { if (this.muted||!this.ctx) return; this._tone(420, 0.05, 0.12, 'triangle', 300); },
+  thunder() {
+    if (this.muted || !this.ctx) return;
+    this._noise(1.2, 0.5, 260);
+    this._tone(60, 1.0, 0.3, 'sine', 30);
+  },
+  /* 环境海浪声（低频底噪，按天候强度调用） */
+  ambient(strength = 1) {
+    if (this.muted || !this.ctx) return;
+    this._noise(1.6, 0.06 * strength, 700);
+  },
   baseHit() { if (this.muted||!this.ctx) return; this._tone(120, 0.25, 0.35, 'sawtooth', 60); },
   upgrade() { if (this.muted||!this.ctx) return; this._tone(660, 0.1, 0.2, 'square', 990); },
   coin() { if (this.muted||!this.ctx) return; this._tone(880, 0.08, 0.18, 'square', 1180); },

@@ -3,8 +3,18 @@
 
 const TAU = Math.PI * 2;
 
-/* 全局设置（设置面板）：帧数显示 / 声音 / 音量 */
-const Settings = { showFps: false, volume: 1, soundOn: true };
+/* 全局设置（设置面板）：帧数显示 / 声音 / 音量 / 视野缩放 / 画质 */
+const Settings = {
+  showFps: false,
+  volume: 1,
+  soundOn: true,
+  zoom: 1,          // 当前视野缩放（>1 看得更近，<1 看得更远）
+  zoomTarget: 1,    // 目标缩放（滚轮 / 双指 / 按钮设置，平滑逼近）
+  quality: 'high',  // low | mid | high（粒子数量与水面层数）
+  difficulty: 'normal',   // easy | normal | hard（敌方 AI 强度）
+  pingType: 'gather',     // 当前指令标记类型
+};
+const ZOOM_MIN = 0.55, ZOOM_MAX = 1.9;
 
 function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
 function lerp(a, b, t) { return a + (b - a) * t; }

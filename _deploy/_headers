@@ -1,0 +1,19 @@
+# 部署缓存配置 · Netlify / Cloudflare Pages / Vercel（静态托管都识别这个 _headers 文件）
+# 放到站点根目录即可。
+
+/index.html
+  Cache-Control: no-store, no-cache, must-revalidate
+  Pragma: no-cache
+
+/version.json
+  Cache-Control: no-store, no-cache, must-revalidate
+  Pragma: no-cache
+
+/js/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/css/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

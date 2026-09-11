@@ -7,7 +7,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>海盗湾 · 3v3 海战 MOBA</title>
-  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/style.css?v=20260911-140500" />
 </head>
 <body>
   <div id="frame">
@@ -30,6 +30,8 @@
 
       <div class="hud-center">
         <div class="wave-badge" id="wave-badge">3v3 海战</div>
+        <div class="weather-chip" id="weather">☀️ 晴朗</div>
+        <div class="lvl-chip" id="lvl-chip" title="船长等级（经验来自击杀与时间）">⭐ Lv.1</div>
         <div class="bounty" id="bounty">💰 0</div>
         <div class="score" id="score">击杀 0 · 0:00</div>
       </div>
@@ -41,12 +43,37 @@
           <span class="hud-num" id="ebase-num">0</span>
         </div>
         <button id="btn-skill" class="hud-btn skill-btn" title="船体技能（Q）">💨</button>
+        <button id="btn-item0" class="hud-btn item-btn" title="道具 1（E）">▫️</button>
+        <button id="btn-item1" class="hud-btn item-btn" title="道具 2（R）">▫️</button>
         <button id="btn-open-menu" class="hud-btn" title="装备 / 升级（P）">⚙️ 装备</button>
         <button id="btn-repair" class="hud-btn" title="修理旗舰号">🔧 修船</button>
         <button id="btn-range" class="hud-btn" title="显示/隐藏武器射程">🎯 射程</button>
+        <button id="btn-ping" class="hud-btn" title="指令标记：右键世界 或 点小地图 发信号">📍 集合</button>
         <button id="btn-pause" class="hud-btn" title="暂停/继续（空格）">⏸ 暂停</button>
-        <button id="btn-mute" class="hud-btn" title="音效开关（M）">🔊</button>
-        <button id="btn-settings" class="hud-btn" title="设置：帧数 / 声音">⚙️ 设置</button>
+        <button id="btn-settings" class="hud-btn" title="设置：帧数 / 声音 / 难度">⚙️ 设置</button>
+      </div>
+    </div>
+
+    <!-- 团队增益徽章（独立定位，不挤占中央信息栏） -->
+    <div class="buff-row" id="buff-row"></div>
+
+    <!-- 船坞接近提示（装备与道具分开：两个独立入口） -->
+    <div id="dock-hint" class="hidden">
+      <span class="dh-text">⚓ 已抵达船坞</span>
+      <button id="btn-dock-quick" class="dh-btn">🛒 装备升级（P）</button>
+      <button id="btn-shop-quick" class="dh-btn shop">🎒 道具商店</button>
+    </div>
+
+    <!-- 道具商店（独立于武器/船体装备界面） -->
+    <div id="itemshop" class="hidden">
+      <div class="itemshop-panel">
+        <div class="picker-head">
+          <span id="itemshop-title">🎒 道具商店 · 主动道具</span>
+          <span class="is-gold" id="itemshop-gold">💰 0</span>
+          <button id="itemshop-close" class="close-btn">✕</button>
+        </div>
+        <div class="is-hint">购买后按 <b>E</b> / <b>R</b>（手机点 HUD 上的道具按钮）释放；同一道具可同时装在两栏。</div>
+        <div id="itemshop-grid"></div>
       </div>
     </div>
 
@@ -71,7 +98,23 @@
             <input id="set-vol" class="set-vol" type="range" min="0" max="100" step="1" value="100" />
             <span class="set-vol-num" id="set-vol-num">100%</span>
           </div>
-          <div class="set-note">快捷键：M 静音 · P 船坞 · C 作弊刷钱</div>
+          <div class="set-row">
+            <span class="set-label">视野缩放<br/><span class="set-hint">PC 滚轮 / 手机双指</span></span>
+            <button id="set-zoom-out" class="set-btn">🔍−</button>
+            <button id="set-zoom-reset" class="set-btn">默认</button>
+            <button id="set-zoom-in" class="set-btn">🔍＋</button>
+          </div>
+          <div class="set-row">
+            <span class="set-label">画质</span>
+            <button id="set-quality" class="set-btn on">画质：高</button>
+          </div>
+          <div class="set-row">
+            <span class="set-label">敌方难度<br/><span class="set-hint">影响敌方 AI 灵敏度/集火/抢野</span></span>
+            <button id="set-diff-easy" class="set-btn" data-diff="easy">🌤️ 简单</button>
+            <button id="set-diff-normal" class="set-btn on" data-diff="normal">⛅ 普通</button>
+            <button id="set-diff-hard" class="set-btn" data-diff="hard">⛈️ 困难</button>
+          </div>
+          <div class="set-note">快捷键：M 静音 · P 船坞 · Q 技能 · E/R 道具 · 右键发指令 · C 作弊</div>
         </div>
       </div>
     </div>
@@ -88,6 +131,7 @@
           <div class="module" id="mod-hull"></div>
           <div class="module" id="mod-sail"></div>
           <div class="module" id="mod-armor"></div>
+          <div class="module" id="mod-items"></div>
         </div>
       </div>
       <div class="cheat-row">
@@ -116,6 +160,17 @@
     <!-- 提示条 -->
     <div id="toast" class="hidden"></div>
 
+    <!-- 船长天赋三选一 -->
+    <div id="talents" class="hidden">
+      <div class="talent-panel">
+        <div class="picker-head">
+          <span id="talent-title">⭐ 船长天赋 · 三选一</span>
+          <span id="talent-pending" class="talent-pending"></span>
+        </div>
+        <div class="talent-grid" id="talent-grid"></div>
+      </div>
+    </div>
+
     <!-- 击杀英雄播报 -->
     <div id="announce"></div>
 
@@ -136,6 +191,12 @@
         </p>
         <div class="controls-row">
           <span>🧭 方向键移动</span><span>🎯 武器自动开火</span><span>🤖 队友自动强化</span><span>🗺️ 5 屏大海图</span>
+        </div>
+        <div class="diff-row" id="menu-diff">
+          <span class="diff-label">敌方 AI 难度</span>
+          <button class="diff-btn" data-diff="easy">🌤️ 简单</button>
+          <button class="diff-btn on" data-diff="normal">⛅ 普通</button>
+          <button class="diff-btn" data-diff="hard">⛈️ 困难</button>
         </div>
         <p class="panel-sub" style="font-size:12px;opacity:.75">
           📱 手机版：在画面上<b>按住拖动即为摇杆</b>；右上角按钮：装备 / 修船 / 🎯射程 / ⏸暂停 / 静音。建议横屏玩耍。
@@ -164,23 +225,24 @@
   </div>
 
   <!-- 渲染与逻辑（普通脚本，按依赖顺序加载；data 与代码分离便于修改） -->
-  <script src="js/utils.js"></script>
-  <script src="js/config.js"></script>
-  <script src="assets/manifest.js"></script>
-  <script src="js/assets.js"></script>
-  <script src="js/rig.js"></script>
-  <script src="js/audio.js"></script>
-  <script src="js/input.js"></script>
-  <script src="js/water.js"></script>
-  <script src="js/map.js"></script>
-  <script src="js/effects.js"></script>
-  <script src="js/projectile.js"></script>
-  <script src="js/minion.js"></script>
-  <script src="js/monster.js"></script>
-  <script src="js/tower.js"></script>
-  <script src="js/ship.js"></script>
-  <script src="js/ui.js"></script>
-  <script src="js/game.js"></script>
-  <script src="js/main.js"></script>
+  <script src="js/version.js?v=20260911-140500"></script>
+  <script src="js/utils.js?v=20260911-140500"></script>
+  <script src="js/config.js?v=20260911-140500"></script>
+  <script src="assets/manifest.js?v=20260911-140500"></script>
+  <script src="js/assets.js?v=20260911-140500"></script>
+  <script src="js/rig.js?v=20260911-140500"></script>
+  <script src="js/audio.js?v=20260911-140500"></script>
+  <script src="js/input.js?v=20260911-140500"></script>
+  <script src="js/water.js?v=20260911-140500"></script>
+  <script src="js/map.js?v=20260911-140500"></script>
+  <script src="js/effects.js?v=20260911-140500"></script>
+  <script src="js/projectile.js?v=20260911-140500"></script>
+  <script src="js/minion.js?v=20260911-140500"></script>
+  <script src="js/monster.js?v=20260911-140500"></script>
+  <script src="js/tower.js?v=20260911-140500"></script>
+  <script src="js/ship.js?v=20260911-140500"></script>
+  <script src="js/ui.js?v=20260911-140500"></script>
+  <script src="js/game.js?v=20260911-140500"></script>
+  <script src="js/main.js?v=20260911-140500"></script>
 </body>
 </html>

@@ -7,10 +7,34 @@ const UI = {
   slotNodes: [],
   moduleNodes: {},
   toastTimer: null,
-  dockOpen: false,
-  settingsOpen: false,
   pickerSlot: -1,
   rangeOn: false,     // 触屏端开关：显示武器射程（手机没有 Ctrl）
+
+  /* --------- UI 层级管理：所有覆盖层统一登记，游戏暂停与提示都以此为准 --------- */
+  layers: { dock: false, itemshop: false, picker: false, talents: false, settings: false },
+  Z: { dock: 30, itemshop: 42, picker: 44, talents: 46, settings: 48 },
+  _layerEl(name) {
+    const map = { dock: 'dock', itemshop: 'itemshop', picker: 'picker', talents: 'talents', settings: 'settings' };
+    return this.els[map[name]];
+  },
+  openLayer(name) {
+    const el = this._layerEl(name);
+    if (!el) return;
+    this.layers[name] = true;
+    el.style.zIndex = String(this.Z[name] || 30);
+    this.show(el);
+  },
+  closeLayer(name) {
+    const el = this._layerEl(name);
+    this.layers[name] = false;
+    if (el) this.hide(el);
+  },
+  anyOverlay() { return Object.keys(this.layers).some(k => this.layers[k]); },
+  get dockOpen() { return this.layers.dock; },
+  get settingsOpen() { return this.layers.settings; },
+  get talentOpen() { return this.layers.talents; },
+  get pickerOpen() { return this.layers.picker; },
+  get shopOpen() { return this.layers.itemshop; },
 
   init(game) {
     this.game = game;
@@ -21,11 +45,17 @@ const UI = {
       ebaseBar: gid('ebase-bar'), ebaseNum: gid('ebase-num'),
       shipBar: gid('ship-bar'), shipNum: gid('ship-num'),
       wave: gid('wave-badge'), bounty: gid('bounty'), score: gid('score'),
+      weather: gid('weather'), lvlChip: gid('lvl-chip'), buffRow: gid('buff-row'),
+      dockHint: gid('dock-hint'),
+      itemBtns: [gid('btn-item0'), gid('btn-item1')],
+      talents: gid('talents'), talentGrid: gid('talent-grid'),
+      talentTitle: gid('talent-title'), talentPending: gid('talent-pending'),
       slots: gid('slots'), picker: gid('picker'), pickerTitle: gid('picker-title'),
       pickerGrid: gid('picker-grid'), menu: gid('menu'), gameover: gid('gameover'),
       victory: gid('victory'), goText: gid('go-text'), goStats: gid('go-stats'),
       victoryStats: gid('victory-stats'), toast: gid('toast'),
       settings: gid('settings'),
+      itemshop: gid('itemshop'), itemShopGrid: gid('itemshop-grid'), itemShopGold: gid('itemshop-gold'),
     };
     this.els.modHull = gid('mod-hull'); this.els.modSail = gid('mod-sail'); this.els.modArmor = gid('mod-armor');
     this.els.roster = gid('roster');
@@ -43,7 +73,7 @@ const UI = {
     gid('btn-playagain').addEventListener('click', () => game.restart());
     gid('btn-open-menu').addEventListener('click', () => this.toggleDock());
     gid('btn-repair').addEventListener('click', () => game.repairShip());
-    gid('btn-mute').addEventListener('click', () => this.toggleSound());
+    // 顶部 HUD 不再放声音按钮：声音开关/音量统一在设置面板里
     gid('btn-range').addEventListener('click', () => {
       this.rangeOn = !this.rangeOn;
       gid('btn-range').classList.toggle('on', this.rangeOn);
@@ -60,6 +90,25 @@ const UI = {
       gid('btn-cheat-auto').classList.toggle('on', game.cheatOn);
     });
     gid('btn-dock-close').addEventListener('click', () => this.toggleDock(false));
+    const quick = gid('btn-dock-quick');
+    if (quick) quick.addEventListener('click', () => this.toggleDock(true));
+    const shopQuick = gid('btn-shop-quick');
+    if (shopQuick) shopQuick.addEventListener('click', () => this.openItemShop(0));
+    gid('itemshop-close').addEventListener('click', () => this.closeItemShop());
+    this.els.itemshop.addEventListener('click', (e) => { if (e.target === this.els.itemshop) this.closeItemShop(); });
+    // 指令标记类型切换（集合 / 撤退 / 打野·危险）
+    this.els.pingBtn = gid('btn-ping');
+    const cyclePing = () => {
+      const i = PINGS.findIndex(p => p.id === Settings.pingType);
+      const next = PINGS[(i + 1 + PINGS.length) % PINGS.length];
+      Settings.pingType = next.id;
+      this._syncPingUI();
+      this.toast(`${next.icon} 指令标记：${next.name}（${next.desc}）`, 1.8);
+    };
+    if (this.els.pingBtn) this.els.pingBtn.addEventListener('click', cyclePing);
+    // 难度选择（菜单 + 设置面板同步）
+    this._bindDiff();
+    this._syncPingUI();
     gid('picker-close').addEventListener('click', () => this.closePicker());
     this.els.picker.addEventListener('click', (e) => { if (e.target === this.els.picker) this.closePicker(); });
 
@@ -73,6 +122,16 @@ const UI = {
       gid('set-fps').classList.toggle('on', Settings.showFps);
     });
     gid('set-sound').addEventListener('click', () => this.toggleSound(true));
+    gid('set-zoom-in').addEventListener('click', () => this.zoomStep(1.2));
+    gid('set-zoom-out').addEventListener('click', () => this.zoomStep(1 / 1.2));
+    gid('set-zoom-reset').addEventListener('click', () => { Settings.zoomTarget = 1; UI.toast('视野已复位', 0.9); });
+    gid('set-quality').addEventListener('click', () => {
+      const order = ['low', 'mid', 'high'];
+      const next = order[(order.indexOf(Settings.quality) + 1) % order.length];
+      Settings.quality = next;
+      gid('set-quality').textContent = '画质：' + ({ low: '低', mid: '中', high: '高' })[next];
+      gid('set-quality').classList.toggle('on', next === 'high');
+    });
     const vol = gid('set-vol');
     vol.addEventListener('input', () => {
       AudioFX.setVolume(Math.round(vol.value) / 100);
@@ -83,6 +142,15 @@ const UI = {
     this._syncSoundUI();
 
     if (this.els.skillBtn) this.els.skillBtn.addEventListener('click', () => game.useSkill());
+    this.els.itemBtns.forEach((b, i) => {
+      if (b) b.addEventListener('click', () => game.useItem(i));
+    });
+    if (this.els.lvlChip) {
+      this.els.lvlChip.addEventListener('click', () => {
+        const p = this.game.player;
+        if (p && p.pendingTalent > 0) this.game.onPlayerLevel(p);
+      });
+    }
 
     const rot = gid('roster-toggle');
     rot.addEventListener('click', () => {
@@ -192,6 +260,22 @@ const UI = {
       el.querySelector('.m-btn').addEventListener('click', () => this.game.upgradeModule(d.key));
       this.moduleNodes[d.key] = { el, name: el.querySelector('.m-name'), stat: el.querySelector('.m-stat'), btn: el.querySelector('.m-btn') };
     }
+    // 主动道具栏（E / R）
+    {
+      const el = this.els.modItems;
+      if (el) {
+        el.innerHTML = `<div class="m-title">🎒 主动道具（独立商店）</div>
+          <div class="m-stat" id="item-stat"></div>
+          <div class="m-btns">
+            <button class="m-btn" data-slot="0">道具栏 1（E）</button>
+            <button class="m-btn" data-slot="1">道具栏 2（R）</button>
+          </div>`;
+        el.querySelectorAll('[data-slot]').forEach((b) => {
+          b.addEventListener('click', () => this.openItemShop(Number(b.dataset.slot)));
+        });
+        this.moduleNodes.items = { el, stat: el.querySelector('#item-stat'), btns: el.querySelectorAll('[data-slot]') };
+      }
+    }
   },
 
   refresh() {
@@ -207,9 +291,22 @@ const UI = {
     this.els.shipNum.textContent = p.dead ? '重生中' : `${Math.max(0, Math.round(p.hp))}/${p.maxHp}`;
 
     this.els.bounty.textContent = '💰 ' + fmt(p.gold);
+    if (this.els.lvlChip) {
+      const need = xpToNext(p.level);
+      this.els.lvlChip.textContent = `⭐ Lv.${p.level}`;
+      this.els.lvlChip.title = `船长等级 ${p.level} · 经验 ${Math.floor(p.xp)}/${need}` + (p.pendingTalent > 0 ? ` · 有 ${p.pendingTalent} 个天赋待选（点击）` : '');
+      this.els.lvlChip.classList.toggle('ready', p.pendingTalent > 0);
+    }
+    this._refreshItems();
+    this._refreshBuffs();
     const mm = Math.floor(g.time / 60), ss = String(Math.floor(g.time % 60)).padStart(2, '0');
     this.els.score.textContent = `击杀 ${g.playerKills} · ${mm}:${ss}`;
     this.els.wave.textContent = '3v3 海战';
+    if (this.els.weather && typeof Weather !== 'undefined') {
+      const wi = Weather.info();
+      this.els.weather.textContent = `${wi.icon} ${wi.name}`;
+      this.els.weather.className = 'weather-chip w-' + Weather.type;
+    }
 
     // 修船冷却
     if (this.els.repairBtn) {
@@ -262,7 +359,10 @@ const UI = {
       if (slot.level >= maxLv) { btn.textContent = maxLv <= 1 ? '无法升级' : '已满级'; btn.disabled = true; }
       else {
         const cost = weaponUpgradeCost(slot.weaponId, slot.level);
-        btn.textContent = `升级 ${cost}💰`; btn.disabled = p.gold < cost;
+        const disc = p.masteryMul ? p.masteryMul(slot.weaponId) : 1;
+        const finalCost = Math.max(20, Math.round(cost * disc));
+        btn.textContent = disc < 1 ? `升级 ${finalCost}💰 (-${Math.round((1 - disc) * 100)}%)` : `升级 ${finalCost}💰`;
+        btn.disabled = p.gold < finalCost;
       }
       node.title = `${w.name} · 点击更换装备`;
     }
@@ -302,8 +402,142 @@ const UI = {
     }
   },
 
+  /* 船坞接近提示（手机可点按按钮购买道具/升级） */
+  showDockHint(on) {
+    const el = this.els.dockHint;
+    if (!el) return;
+    if (on === this._dockHintOn) return;
+    this._dockHintOn = on;
+    if (on) this.show(el); else this.hide(el);
+  },
+
+  /* 团队增益徽章（击杀海兽 / 开宝箱获得） */
+  _refreshBuffs() {
+    const row = this.els.buffRow;
+    if (!row) return;
+    const g = this.game;
+    const buffs = (g.teamBuffs && g.teamBuffs[0]) || {};
+    const keys = Object.keys(buffs);
+    const sig = keys.map(k => k + Math.ceil(buffs[k])).join(',');
+    if (sig === this._buffSig) return;      // 内容未变则不动 DOM
+    this._buffSig = sig;
+    row.innerHTML = '';
+    for (const k of keys.slice(0, 6)) {
+      const def = TEAM_BUFFS[k];
+      if (!def) continue;
+      const el = document.createElement('span');
+      el.className = 'buff-chip b-' + k;
+      el.textContent = `${def.icon} ${def.name} ${Math.ceil(buffs[k])}s`;
+      el.title = def.desc;
+      row.appendChild(el);
+    }
+  },
+
+  /* 主动道具按钮 / 船坞道具栏状态 */
+  _refreshItems() {
+    const p = this.game.player;
+    if (!p) return;
+    for (let i = 0; i < 2; i++) {
+      const b = this.els.itemBtns[i];
+      if (!b) continue;
+      const id = p.items[i];
+      const cd = p.itemCd[i];
+      if (!id) { b.textContent = '▫️'; b.disabled = true; b.title = `道具栏 ${i + 1} 为空（船坞里购买）`; continue; }
+      const def = ITEMS[id];
+      b.disabled = cd > 0;
+      b.textContent = cd > 0 ? `${def.icon}${Math.ceil(cd)}s` : def.icon;
+      b.title = `${def.name}（${i === 0 ? 'E' : 'R'}）：${def.desc}`;
+    }
+    const node = this.moduleNodes.items;
+    if (node) {
+      const desc = [0, 1].map((i) => {
+        const id = p.items[i];
+        return id ? `${ITEMS[id].icon} ${ITEMS[id].name}` : '空';
+      }).join(' · ');
+      node.stat.textContent = desc;
+    }
+    if (this.layers.itemshop) this._refreshItemShop();
+  },
+
+  /* 船长天赋三选一 */
+  openTalents(offer, pending) {
+    const grid = this.els.talentGrid;
+    if (!grid) return;
+    this.openLayer('talents');
+    grid.innerHTML = '';
+    this.els.talentPending.textContent = pending > 1 ? `还有 ${pending} 次选择` : '选择后立即生效';
+    const p = this.game.player;
+    for (const t of offer) {
+      const lv = p.talentCount(t.id);
+      const card = document.createElement('div');
+      card.className = 'tcard';
+      card.innerHTML = `
+        <div class="t-icon">${t.icon}</div>
+        <div class="t-name">${t.name}${lv ? ` <span class="t-lv">已有 ${lv} 层</span>` : ''}</div>
+        <div class="t-desc">${t.desc}</div>`;
+      card.addEventListener('click', () => {
+        this.game.chooseTalent(t.id);
+        if (this.game.player.pendingTalent <= 0) this.closeTalents();
+      });
+      grid.appendChild(card);
+    }
+    this.show(this.els.talents);
+  },
+  closeTalents() { this.closeLayer('talents'); },
+
+  /* --------- 道具商店（独立于武器/船体的装备界面） --------- */
+  openItemShop(slot) {
+    this.shopSlot = slot === 0 || slot === 1 ? slot : 0;
+    this.openLayer('itemshop');
+    this._refreshItemShop();
+  },
+  closeItemShop() { this.closeLayer('itemshop'); },
+  _refreshItemShop() {
+    const p = this.game && this.game.player;
+    const grid = this.els.itemShopGrid;
+    if (!p || !grid) return;
+    grid.innerHTML = '';
+    const slot = this.shopSlot || 0;
+    // 两张卡片并列：道具栏 1（E） / 道具栏 2（R）
+    const wrap = document.createElement('div');
+    wrap.className = 'is-cols';
+    for (let si = 0; si < 2; si++) {
+      const col = document.createElement('div');
+      col.className = 'is-col' + (si === slot ? ' active' : '');
+      const cur = p.items[si];
+      col.innerHTML = `<div class="is-head">道具栏 ${si + 1} · 键位 ${si === 0 ? 'E' : 'R'}
+        <span class="is-cur">${cur ? ITEMS[cur].icon + ' ' + ITEMS[cur].name : '空'}</span></div>`;
+      for (const id of ITEM_ORDER) {
+        const it = ITEMS[id];
+        const afford = p.gold >= it.cost;
+        const inUse = cur === id;
+        const row = document.createElement('div');
+        row.className = 'is-row' + (inUse ? ' equipped' : '') + (afford ? '' : ' no-cash');
+        row.innerHTML = `
+          <span class="is-icon">${it.icon}</span>
+          <span class="is-body">
+            <span class="is-name">${it.name}<span class="is-cd">冷却 ${it.cd}s</span></span>
+            <span class="is-desc">${it.desc}</span>
+          </span>
+          <span class="is-buy">${inUse ? '✓ 已装备' : (afford ? '💰 ' + it.cost : '💰 ' + it.cost + '<br/><i>金币不足</i>')}</span>`;
+        row.addEventListener('click', () => {
+          if (inUse) { this.toast('该道具已在此栏'); return; }
+          if (!afford) { this.toast('金币不足'); return; }
+          this.shopSlot = si;
+          this.game.buyItem(si, id);
+          this._refreshItemShop();
+        });
+        col.appendChild(row);
+      }
+      wrap.appendChild(col);
+    }
+    grid.appendChild(wrap);
+    if (this.els.itemShopGold) this.els.itemShopGold.textContent = '💰 ' + fmt(p.gold);
+  },
+
   openPicker(slotIndex) {
     this.pickerSlot = slotIndex;
+    this.openLayer('picker');
     const slot = this.game.player.slots[slotIndex];
     this.els.pickerTitle.textContent = `为 ${SLOT_LABELS[slotIndex]} 炮位选择武器`;
     const grid = this.els.pickerGrid;
@@ -334,13 +568,13 @@ const UI = {
       });
       grid.appendChild(card);
     }
-    this.show(this.els.picker);
   },
-  closePicker() { this.hide(this.els.picker); this.pickerSlot = -1; this.pickerMode = null; },
+  closePicker() { this.closeLayer('picker'); this.pickerSlot = -1; this.pickerMode = null; },
 
   /* --------- 船体选择（技能不同） --------- */
   openHullPicker() {
     this.pickerMode = 'hull';
+    this.openLayer('picker');
     this.els.pickerTitle.textContent = '选择船体（各有专属技能）';
     const grid = this.els.pickerGrid;
     grid.innerHTML = '';
@@ -373,20 +607,47 @@ const UI = {
       });
       grid.appendChild(card);
     }
-    this.show(this.els.picker);
+  },
+
+  /* --------- 难度与指令标记 --------- */
+  _bindDiff() {
+    const btns = document.querySelectorAll ? document.querySelectorAll('[data-diff]') : [];
+    this._diffBtns = [];
+    const list = btns && btns.length ? btns : [];
+    for (const b of list) {
+      b.addEventListener('click', () => {
+        Settings.difficulty = b.dataset.diff || 'normal';
+        this._syncDiffUI();
+        const D = DIFFICULTY[Settings.difficulty];
+        this.toast(`敌方 AI 难度：${D.icon} ${D.name}`, 1.6);
+      });
+      this._diffBtns.push(b);
+    }
+    this._syncDiffUI();
+  },
+  _syncDiffUI() {
+    for (const b of (this._diffBtns || [])) {
+      b.classList.toggle('on', b.dataset.diff === Settings.difficulty);
+    }
+  },
+  _syncPingUI() {
+    const def = PINGS.find(p => p.id === Settings.pingType) || PINGS[0];
+    if (this.els.pingBtn) this.els.pingBtn.textContent = `${def.icon} ${def.name}`;
   },
 
   toggleDock(force) {
-    this.dockOpen = force === undefined ? !this.dockOpen : force;
-    if (this.dockOpen) this.show(this.els.dock); else this.hide(this.els.dock);
-    if (this.dockOpen) this._refreshSlots();
+    const open = force === undefined ? !this.layers.dock : force;
+    if (open) this.openLayer('dock'); else this.closeLayer('dock');
+    if (open) this._refreshSlots();
   },
 
   /* --------- 设置面板 --------- */
+  zoomStep(mul) {
+    Settings.zoomTarget = clamp(Settings.zoomTarget * mul, ZOOM_MIN, ZOOM_MAX);
+  },
   toggleSettings(force) {
-    const open = force === undefined ? this.els.settings.classList.contains('hidden') : force;
-    this.settingsOpen = open;
-    if (open) this.show(this.els.settings); else this.hide(this.els.settings);
+    const open = force === undefined ? !this.layers.settings : force;
+    if (open) this.openLayer('settings'); else this.closeLayer('settings');
   },
   toggleSound(syncOnly) {
     AudioFX.muted = !AudioFX.muted;
@@ -396,8 +657,6 @@ const UI = {
   },
   _syncSoundUI() {
     const gid = (id) => document.getElementById(id);
-    const m = gid('btn-mute');
-    if (m) m.textContent = AudioFX.muted ? '🔇' : '🔊';
     const s = gid('set-sound');
     if (s) {
       s.textContent = AudioFX.muted ? '声音：关' : '声音：开';

@@ -477,6 +477,21 @@ function sharkBodyPx(dy, h) {
   // 鼻端暗尖 + 中脊线
   c.poly([[cx, E(3)], [cx + 5, E(9)], [cx, E(15)], [cx - 5, E(9)]], hex('#3a708c'));
   c.line(cx, E(12), cx, E(88), hex('#3a708c'), 1);
+  // 侧线（俯视可见的浅色纵纹）+ 皮齿斑点
+  for (const s of [1, -1]) {
+    for (let y = 20; y <= 84; y += 2) {
+      const w = Math.max(1.2, prof(y) - 3.2);
+      c.put(cx + s * w, E(y), hex('#6ba7c0'));
+    }
+    for (let i = 0; i < 9; i++) {
+      const y = 26 + i * 7;
+      const w = Math.max(1.4, prof(y) - 5 - (i % 3));
+      c.put(cx + s * w, E(y + (i % 2 ? 1 : 0)), [130, 190, 214, 150]);
+    }
+  }
+  // 背鳍旧伤缺口（个体特征）
+  c.line(cx + 2, E(48), cx + 4, E(50), hex('#22414f'), 1);
+  c.put(cx + 3, E(47), hex('#dcedf4'));
   // 鳃缝
   for (const s of [1, -1]) for (let k = 0; k < 3; k++) {
     const gy = 34 + k * 4;

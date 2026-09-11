@@ -8,6 +8,7 @@ const Assets = {
   img: null,
   m: {},
   _tiles: {},
+  _pats: {},
 
   init(done) {
     try {
@@ -17,7 +18,9 @@ const Assets = {
       const img = new Image();
       img.onload = () => { this.img = img; this.ok = true; if (done) done(); };
       img.onerror = () => { if (done) done(); };
-      img.src = 'assets/atlas.png';
+      // 图集同样带构建版本号，避免"代码更新了、贴图还是旧的"
+      const v = (typeof window !== 'undefined' && window.GAME_VERSION) ? window.GAME_VERSION : '';
+      img.src = 'assets/atlas.png' + (v ? '?v=' + encodeURIComponent(v) : '');
     } catch (e) { if (done) done(); }
   },
 
@@ -93,13 +96,36 @@ const Assets = {
     return cv;
   },
 
-  /* 平铺填充给定矩形（用于水面） */
+  /* 平铺用 Pattern 缓存（避免每帧上千次 drawImage） */
+  pattern(ctx, id) {
+    if (!this.has(id)) return null;
+    const hit = this._pats[id];
+    if (hit && hit.ctx === ctx) return hit.p;
+    const t = this.tile(id);
+    if (!t) return null;
+    const p = ctx.createPattern(t, 'repeat');
+    if (!p) return null;
+    this._pats[id] = { ctx, p };
+    return p;
+  },
+
+  /* 平铺填充给定矩形（用于水面；优先 Pattern，失败退回逐块绘制） */
   tileRect(ctx, id, x, y, w, h, offX = 0, offY = 0, repeatW = 32, repeatH = 32) {
+    const pat = this.pattern(ctx, id);
+    if (pat) {
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      ctx.translate(offX, offY);
+      ctx.fillStyle = pat;
+      ctx.fillRect(x - offX, y - offY, w, h);
+      ctx.restore();
+      return true;
+    }
     const t = this.tile(id);
     if (!t) return false;
     ctx.save();
     ctx.imageSmoothingEnabled = false;
-    // 先平铺满的基准
+    // 退回：逐块绘制
     for (let yy = 0; yy < h; yy += repeatH) {
       for (let xx = 0; xx < w; xx += repeatW) {
         ctx.drawImage(t, x + xx + offX, y + yy + offY);

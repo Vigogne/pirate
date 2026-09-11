@@ -1,4 +1,4 @@
-/* minion.js — 护航舰：行为简单的自动单位，沿兵线进攻对方基地 */
+﻿/* minion.js — 护航舰：行为简单的自动单位，沿兵线进攻对方基地 */
 "use strict";
 
 class Minion {
@@ -6,19 +6,33 @@ class Minion {
     const def = MINIONS[type || 'sloop'];
     this.game = game;
     this.team = team;
+    this.type = type || 'sloop';
     this.isHero = false;
     this.name = def.name;
     this.money = def.money;
     this.armor = 0;
-    this.maxHp = def.hp;
-    this.hp = def.hp;
-    this.speed = def.speed;
-    this.damage = def.damage;
+    // 兵线成长：每 5 分钟全体护航舰变强
+    const tier = game && game.waveTier ? game.waveTier : 0;
+    const grow = 1 + tier * MINION_GROW.hp;
+    const gdmg = 1 + tier * MINION_GROW.dmg;
+    const gspd = 1 + tier * MINION_GROW.spd;
+    this.waveTier = tier;
+    this.maxHp = Math.round(def.hp * grow);
+    this.hp = this.maxHp;
+    this.speed = def.speed * gspd;
+    this.damage = def.damage * gdmg;
     this.range = def.range;
     this.rate = def.rate;
     this.size = def.size;
     this.palette = def.palette;
     this.rad = 20 * def.size;
+    // 特殊兵种
+    this.isMiner = !!def.mines;
+    this.auraR = def.aura || 0;
+    this.siegeMul = def.siege || 0;
+    this.mineCD = 1.6;
+    this.buffT = 0;
+    this.auraT = 0;
 
     const base = game.baseOf(team);
     this.laneX = LANES[lane % LANES.length];
@@ -30,13 +44,15 @@ class Minion {
     this.fireCD = rand(0.2, 0.8);
     this.flash = 0;
     this.dead = false;
-    this.wake = new WakeTrail(130);
+    this.wake = new WakeTrail(110);
     this.marching = true;
   }
 
   hitBy(dmg, ix, iy, game) {
     if (this.dead) return;
-    this.hp -= dmg;
+    // 旗船光环：附近的友军享受 30% 减伤
+    const real = this.buffT > 0 ? dmg * 0.7 : dmg;
+    this.hp -= real;
     this.flash = 0.1;
     if (ix !== undefined) Particles.spark(ix, iy, rand(0, TAU), 3, '#ffcf70');
     if (this.hp <= 0) {
@@ -52,13 +68,26 @@ class Minion {
     if (this.dead) return;
     this.t += dt;
     this.flash = Math.max(0, this.flash - dt);
+    this.buffT = Math.max(0, this.buffT - dt);
     this.wake.update(dt);
     const px = this.x, py = this.y;
+
+    // 旗船：给周围友军挂护盾光环（30% 减伤）
+    if (this.auraR > 0) {
+      this.auraT -= dt;
+      if (this.auraT <= 0) {
+        this.auraT = 0.4;
+        for (const u of game.minions) {
+          if (u.dead || u.team !== this.team || u === this) continue;
+          if (dist(this.x, this.y, u.x, u.y) <= this.auraR) u.buffT = 0.6;
+        }
+      }
+    }
 
     // 索敌（射程内最近的对立单位；无敌塔不索敌）
     let target = null, best = Infinity;
     for (const u of game.units) {
-      if (u.dead || u.invuln || u.team === this.team) continue;
+      if (u.dead || u.invuln || u.isChest || u.team === this.team || u.stealthT > 0) continue;
       const d = dist(this.x, this.y, u.x, u.y);
       if (d <= this.range && d < best) { best = d; target = u; }
     }
@@ -82,19 +111,29 @@ class Minion {
         Particles.muzzle(muzzle.x, muzzle.y, aim, '#ffb15a');
         Projectiles.launch({
           x: muzzle.x, y: muzzle.y, ang: aim,
-          style: 'cannonball', damage: this.damage, splash: 0, pierce: 0,
-          team: this.team, owner: this, color: '#2c2f38', size: 5,
-          speed: 420, range: this.range + 40,
+          style: this.siegeMul ? 'grenade' : 'cannonball',
+          damage: this.damage, splash: this.siegeMul ? 30 : 0, pierce: 0,
+          team: this.team, owner: this, color: '#2c2f38', size: this.siegeMul ? 6 : 5,
+          speed: this.siegeMul ? 360 : 420, range: this.range + 40,
+          arc: !!this.siegeMul, arcH: this.siegeMul ? 130 : 0,
         });
         AudioFX.cannon();
       }
     } else {
-      // 沿兵线推进
+      // 沿兵线推进（恶劣海况减速）
       const dir = this.team === 0 ? -1 : 1;   // 我方在上打，敌方在下打
       const wx0 = this.x, wy0 = this.y;
-      this.y += dir * this.speed * dt;
+      this.y += dir * this.speed * Weather.fx.speed * dt;
       this.x = this.laneX + Math.sin(this.wob + this.t * 0.9) * 10;
       this.angle = this.team === 0 ? 0 : Math.PI;
+      // 水雷船：沿途布设水雷
+      if (this.isMiner) {
+        this.mineCD -= dt;
+        if (this.mineCD <= 0) {
+          this.mineCD = MINIONS.miner.mineCD;
+          game.addMine(this);
+        }
+      }
       // 实际位移（避免被陆地弹飞时留下凭空轨迹）
       const wmoved = dist(wx0, wy0, this.x, this.y);
       if (wmoved > 1 && wmoved < 60) {
@@ -106,9 +145,75 @@ class Minion {
     this.x = clamp(this.x, 40, WORLD.w - 40);
     this.y = clamp(this.y, 70, WORLD.h - 70);
     game.landResolve(this);
+    // 洋流与风：护航舰同样被推着走（顺流更快抵达战场）
+    game.applyDrift(this, dt, 1.0);
 
     this.vx = dt > 0 ? (this.x - px) / dt : 0;
     this.vy = dt > 0 ? (this.y - py) / dt : 0;
+  }
+
+  /* 兵种标识（局部坐标，随船身旋转）：水雷舱 / 大旗 / 撞角装甲 */
+  _typeDeco(ctx) {
+    const R = this.rad;
+    if (this.isMiner) {
+      // 水雷舱：艉部两只雷桶 + 危险条纹
+      ctx.fillStyle = '#2f3a2c';
+      ctx.fillRect(-R * 0.44, R * 0.26, R * 0.26, R * 0.34);
+      ctx.fillRect(R * 0.18, R * 0.26, R * 0.26, R * 0.34);
+      ctx.fillStyle = '#c8d24a';
+      ctx.fillRect(-R * 0.44, R * 0.34, R * 0.26, 3);
+      ctx.fillRect(R * 0.18, R * 0.34, R * 0.26, 3);
+    } else if (this.auraR > 0) {
+      // 旗船：高旗杆 + 队伍大旗
+      ctx.strokeStyle = '#3a2a18'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(0, -R * 0.2); ctx.lineTo(0, -R * 1.35); ctx.stroke();
+      const fl = Math.sin(this.t * 5) * 3;
+      ctx.fillStyle = TEAM[this.team].color;
+      ctx.beginPath();
+      ctx.moveTo(0, -R * 1.34);
+      ctx.lineTo(R * 0.66 + fl, -R * 1.18);
+      ctx.lineTo(0, -R * 1.0);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.75)';
+      ctx.fillRect(0, -R * 1.34, R * 0.3 + fl * 0.4, 2);
+    } else if (this.siegeMul) {
+      // 攻城船：艏部装甲撞板 + 铆钉 + 副炮
+      ctx.fillStyle = '#6b7280';
+      ctx.beginPath();
+      ctx.moveTo(0, -R * 1.24);
+      ctx.lineTo(R * 0.42, -R * 0.78);
+      ctx.lineTo(-R * 0.42, -R * 0.78);
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#9aa3ad';
+      ctx.fillRect(-R * 0.34, -R * 0.86, R * 0.68, 3);
+      ctx.fillStyle = '#2c2f38';
+      ctx.fillRect(-R * 0.2, -R * 0.44, R * 0.4, R * 0.5);
+      ctx.fillStyle = '#c9942e';
+      ctx.fillRect(-R * 0.1, -R * 0.36, R * 0.2, 3);
+    }
+  }
+
+  /* 光环/护盾标记（世界坐标，不随船身旋转） */
+  _auraDeco(ctx) {
+    if (this.auraR > 0) {
+      ctx.save();
+      ctx.globalAlpha = 0.35 + Math.sin(this.t * 2) * 0.08;
+      ctx.strokeStyle = '#ffd76a';
+      ctx.lineWidth = 1.6;
+      ctx.setLineDash([6, 8]);
+      ctx.lineDashOffset = -this.t * 18;
+      ctx.beginPath(); ctx.arc(this.x, this.y, this.auraR, 0, TAU); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+    if (this.buffT > 0) {
+      ctx.save();
+      ctx.globalAlpha = 0.5;
+      ctx.strokeStyle = '#ffe9a0';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(this.x, this.y, this.rad * 1.3, 0, TAU); ctx.stroke();
+      ctx.restore();
+    }
   }
 
   draw(ctx) {
@@ -136,6 +241,7 @@ class Minion {
       ctx.globalAlpha = 0.92;
       ctx.fillRect(-this.rad * 0.5, -this.rad * 0.34, this.rad, 4);
       ctx.globalAlpha = 1;
+      this._typeDeco(ctx);
       if (this.flash > 0) {
         const st = (this.flash / 0.1);
         if (Assets.has(sprBase + '_b__e')) {
@@ -148,6 +254,8 @@ class Minion {
         }
       }
       ctx.restore();
+      // 旗船光环 / 受护盾标记
+      this._auraDeco(ctx);
       if (this.hp < this.maxHp) {
         const w = this.rad * 1.7, h = 4;
         roundRect(ctx, this.x - w / 2, this.y - this.rad - 10, w, h, 2);
@@ -246,6 +354,8 @@ class Minion {
     ctx.fillStyle = shade(this.palette[0], -50);
     roundRect(ctx, -R * 0.05, R * 0.78, R * 0.1, R * 0.18, 2); ctx.fill();
 
+    this._typeDeco(ctx);
+
     if (this.flash > 0) {
       ctx.globalAlpha = this.flash / 0.1;
       ctx.fillStyle = '#fff';
@@ -253,6 +363,7 @@ class Minion {
       ctx.globalAlpha = 1;
     }
     ctx.restore();
+    this._auraDeco(ctx);
 
     // 血条
     if (this.hp < this.maxHp) {

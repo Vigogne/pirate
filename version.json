@@ -1,0 +1,5 @@
+{
+  "version": "20260911-140500",
+  "built": "2026-09-11T06:05:00.476Z",
+  "note": "把 version.json 里的 version 与页面内 window.GAME_VERSION 比对，不一致即自动清理缓存并强刷"
+}

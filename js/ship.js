@@ -69,6 +69,17 @@ class Ship {
       if (WEAPONS[plan[i]]) this.slots[i].weaponId = plan[i];
     }
 
+    // 船长等级 / 天赋 / 主动道具 / 武器熟练度
+    this.level = 1;
+    this.xp = 0;
+    this.pendingTalent = 0;
+    this.talents = {};
+    this.items = [null, null];
+    this.itemCd = [0, 0];
+    this.mastery = {};
+    this.stealthT = 0;
+    this.stunT = 0;
+
     this.t = rand(0, TAU);
     this.disabled = false;
     this.lastHit = -99;
@@ -93,6 +104,102 @@ class Ship {
     }
   }
 
+  /* --------- 船长等级 / 天赋 --------- */
+  addXp(v, game) {
+    this.xp += v;
+    while (this.xp >= xpToNext(this.level)) {
+      this.xp -= xpToNext(this.level);
+      this.level++;
+      this.pendingTalent++;
+      // 只有玩家的船会弹天赋面板；AI 在 _aiThink 里自动选，其余（如靶船）只累计不处理
+      if (!this.ai && game && game.player === this && game.onPlayerLevel) game.onPlayerLevel(this);
+    }
+  }
+
+  /* 应用一条天赋（AI 自动选，玩家由面板选） */
+  applyTalent(id) {
+    const t = TALENTS.find(x => x.id === id);
+    if (!t) return false;
+    this.talents[id] = (this.talents[id] || 0) + 1;
+    this.pendingTalent = Math.max(0, this.pendingTalent - 1);
+    this.recompute();
+    if (!this.ai && typeof UI !== 'undefined' && UI.toast) UI.toast(`天赋获得：${t.icon} ${t.name}`, 1.8);
+    return true;
+  }
+
+  talentCount(id) { return this.talents[id] || 0; }
+
+  /* --------- 主动道具 --------- */
+  useItem(idx, game) {
+    const id = this.items[idx];
+    if (!id || this.itemCd[idx] > 0 || this.dead) return false;
+    const def = ITEMS[id];
+    const ok = this._itemEffect(id, game);
+    if (!ok) return false;
+    this.itemCd[idx] = def.cd;
+    AudioFX.upgrade();
+    return true;
+  }
+
+  _itemEffect(id, game) {
+    if (id === 'repairkit') {
+      if (this.hp >= this.maxHp) return false;
+      this.hp = Math.min(this.maxHp, this.hp + this.maxHp * 0.35);
+      this.disabled = false;
+      Particles.ring(this.x, this.y, 60, 'rgba(126,240,160,0.9)');
+      AudioFX.upgrade();
+      return true;
+    }
+    if (id === 'smoke') {
+      this.stealthT = 3.2;
+      Particles.smoke(this.x, this.y, 14, 55);
+      Particles.ring(this.x, this.y, 70, 'rgba(210,225,235,0.8)');
+      AudioFX.splash();
+      return true;
+    }
+    if (id === 'minekit') {
+      for (let k = 0; k < 3; k++) {
+        game.addMine({ x: this.x - Math.cos(this.angle) * (30 + k * 34), y: this.y + Math.sin(this.angle) * (30 + k * 34), team: this.team });
+      }
+      AudioFX.coin();
+      return true;
+    }
+    if (id === 'grapple') {
+      // 钩中最远的对手？——取射程内最近的敌舰并拖拽
+      let best = null, bd = 320;
+      for (const u of game.units) {
+        if (u.dead || u.invuln || u.team === this.team || u.team === 2 || u.base) continue;
+        const d = dist(this.x, this.y, u.x, u.y);
+        if (d < bd) { bd = d; best = u; }
+      }
+      if (!best) return false;
+      const a = angleTo(this.x, this.y, best.x, best.y);
+      best.x = this.x + Math.cos(a) * (this.radius + best.rad + 6);
+      best.y = this.y + Math.sin(a) * (this.radius + best.rad + 6);
+      best.hitBy(70, best.x, best.y, game, this);
+      best.stunT = 0.8;
+      Particles.spark(best.x, best.y, a, 10, '#e8e0c0');
+      AudioFX.harpoon();
+      return true;
+    }
+    return false;
+  }
+
+  /* 炮位数值（含天赋 + 团队增益加成） */
+  stats(slot) {
+    const st = weaponStats(slot.weaponId, slot.level);
+    st.range *= 1 + 0.07 * this.talentCount('range');
+    let dmgMul = 1 + 0.08 * this.talentCount('damage');
+    if (this.game && this.game.buffOn(this.team, 'dmg')) dmgMul *= 1.15;
+    st.damage *= dmgMul;
+    return st;
+  }
+  /* 熟练度带来的升级折扣（同一门炮打得越多，升级越便宜） */
+  masteryMul(weaponId) {
+    const uses = this.mastery[weaponId] || 0;
+    return 1 - Math.min(0.35, uses * 0.0025);
+  }
+
   recompute() {
     const hull = HULLS.find(h => h.id === this.hullId) || HULLS[0];
     const stats = hullStatsAt(hull, this.hullLv[this.hullId] || 1);
@@ -102,9 +209,12 @@ class Ship {
     const maxHp = stats.maxHp + armor.maxHp;
     this.maxHp = maxHp;
     this.hp = Math.min(this.hp === undefined ? maxHp : this.hp, maxHp);
-    this.speed = sail.speed;
-    this.reloadMul = sail.reloadMul;
+    this.speed = sail.speed * (1 + 0.07 * this.talentCount('sail'));
+    this.reloadMul = sail.reloadMul * (1 - 0.09 * this.talentCount('reload'));
     this.damageReduction = armor.reduce;
+    this.talentRed = 0.06 * this.talentCount('hull');
+    this.regen = 1.6 * this.talentCount('regen');
+    this.goldBonus = 1 + 0.22 * this.talentCount('booty');
     this.scale = stats.size;
     // 碰撞半径（含船长舰宽，作为被击与陆地阻挡的判定）
     this.radius = this.rad = 58 * this.scale;
@@ -114,7 +224,7 @@ class Ship {
   tryActivateSkill() {
     const sk = this.hullDef && this.hullDef.skill;
     if (!sk || this.dead || this.skillCd > 0) return false;
-    this.skillCd = sk.cd;
+    this.skillCd = sk.cd * (1 - 0.14 * this.talentCount('focus'));   // 技能专精天赋
     this.skillT = sk.dur;
     this.skillId = sk.id;
     if (sk.id === 'ram') this.ramHits = new Set();
@@ -128,7 +238,7 @@ class Ship {
 
   maxWeaponRange() {
     let r = 0;
-    for (const s of this.slots) r = Math.max(r, weaponStats(s.weaponId, s.level).range);
+    for (const s of this.slots) r = Math.max(r, this.stats(s).range);
     return r;
   }
 
@@ -140,7 +250,7 @@ class Ship {
       if (this.skillId === 'iron') buffRed = 0.75;
       if (this.skillId === 'bio') buffRed = 0.35;
     }
-    const red = Math.min(0.88, this.damageReduction + buffRed);
+    const red = Math.min(0.88, this.damageReduction + buffRed + (this.talentRed || 0) + (this.buffRed || 0));
     const real = dmg * (1 - red);
     this.hp -= real;
     this.flash = 0.1;
@@ -177,6 +287,18 @@ class Ship {
 
     // 技能计时 & 效果
     this.skillCd = Math.max(0, this.skillCd - dt);
+    this.stealthT = Math.max(0, this.stealthT - dt);
+    this.stunT = Math.max(0, (this.stunT || 0) - dt);
+    this.itemCd[0] = Math.max(0, this.itemCd[0] - dt);
+    this.itemCd[1] = Math.max(0, this.itemCd[1] - dt);
+    this.addXp(XP.perSec * dt, game);
+    const buffs = game.teamBuffs[this.team] || {};
+    this.buffSpd = buffs.spd > 0 ? 1.12 : 1;
+    this.buffRed = buffs.shield > 0 ? 0.10 : 0;
+    this.buffRegen = buffs.regen > 0 ? 3 : 0;
+    if (this.regen > 0 || this.buffRegen > 0) {
+      if (this.hp < this.maxHp) this.hp = Math.min(this.maxHp, this.hp + (this.regen + this.buffRegen) * dt);
+    }
     if (this.skillT > 0) {
       this.skillT -= dt;
       if (this.skillT <= 0) this.skillId = null;
@@ -189,6 +311,10 @@ class Ship {
       if (this.skillId === 'fury') rldMul = this.reloadMul * 0.65;
       if (this.skillId === 'bio') spdMul = 1.35;   // 深海狂暴：又硬又快
     }
+    // 海况：恶劣天气整体减速；浅滩让大型船吃水受阻；被钩爪缠住时短暂失控
+    spdMul *= Weather.fx.speed * game.shoalMul(this) * (this.stealthT > 0 ? 1.25 : 1)
+              * (this.buffSpd || 1) * game.beaconSpeedMul(this.team);
+    if (this.stunT > 0) spdMul *= 0.35;
 
     // 移动方向
     let dir;
@@ -201,7 +327,7 @@ class Ship {
       this.x += dxr * this.speed * 3.4 * dt;
       this.y += dyr * this.speed * 3.4 * dt;
       for (const u of game.units) {
-        if (u.dead || u.invuln || u.team === this.team || this.ramHits.has(u)) continue;
+        if (u.dead || u.invuln || u.isChest || u.team === this.team || this.ramHits.has(u)) continue;
         if (dist(this.x, this.y, u.x, u.y) < this.radius + u.rad) {
           this.ramHits.add(u);
           u.hitBy(120, this.x, this.y, game, this);
@@ -225,6 +351,9 @@ class Ship {
     }
 
     this._clampWorld(game);
+
+    // 洋流与风：缓慢推动船身（顺流快、逆流难）
+    game.applyDrift(this, dt, 0.85);
 
     // 铁壁烟囱冒蒸汽（视觉）
     if (!this.dead && this.hullId === 'bulwark' && Math.random() < 0.14) {
@@ -312,12 +441,17 @@ class Ship {
   _aiThink(dt) {
     this.aiT -= dt;
     if (this.aiT <= 0) {
-      this.aiT = 0.28;
+      const D = diffCfg();
+      // 敌方 AI 灵敏度随难度变化（我方队友保持稳定）
+      this.aiT = this.team === 1 ? D.aiTick : 0.28;
+      // AI 经济滴流（敌方受难度倍率影响）
+      if (this.ai) this.gold += 6 * dt * (this.team === 1 ? D.goldMul : 1) * 3;
 
       // 撤退判定：低血量回归本阵修整（边退边打）；
       // 敌塔全破、基地门户大开时更拼（撤退阈值更低，避免决赛局僵持）
       const openBase = this.game.baseOpen(1 - this.team);
-      if (!this.retreating && this.hp < this.maxHp * (openBase ? 0.08 : 0.22)) {
+      const retMul = this.team === 1 ? D.retreatMul : 1;
+      if (!this.retreating && this.hp < this.maxHp * (openBase ? 0.08 : 0.22) * retMul) {
         this.retreating = true;
         this.retreatT = openBase ? 2.5 : 5;
       }
@@ -332,9 +466,56 @@ class Ship {
         const enemyBase = game.baseOf(1 - this.team);
         let target = null, best = Infinity;
 
-        // 优先回防：敌人在己方基地附近
-        for (const u of game.units) {
-          if (u.dead || u.invuln || u.team === this.team) continue;
+        // ① 玩家指令（队友响应）：集合 / 撤退 / 打野·危险
+        if (this.team === 0 && game.ping && game.ping.t > 0) {
+          const pg = game.ping;
+          if (pg.type === 'retreat') {
+            this.retreating = true; this.retreatT = 3;
+          } else if (pg.type === 'gather') {
+            this.aiTarget = { x: pg.x, y: pg.y, ping: true };
+            this.pingFollow = { x: pg.x, y: pg.y, t: 6 };
+          } else if (pg.type === 'danger') {
+            let pick = null, bd = 900;
+            for (const u of game.units) {
+              if (u.dead || u.team === this.team || u.isChest) continue;
+              const d = dist(pg.x, pg.y, u.x, u.y);
+              if (d < bd) { bd = d; pick = u; }
+            }
+            if (pick) this.aiTarget = pick;
+          }
+        }
+
+        // ② 保护残血队友（难度越高越常做）
+        if (!target && Math.random() < D.protect) {
+          for (const h of game.heroes) {
+            if (h === this || h.dead || h.team !== this.team) continue;
+            if (h.hp > h.maxHp * 0.3) continue;
+            if (dist(this.x, this.y, h.x, h.y) > 520) continue;
+            let threat = null, td = 380;
+            for (const u of game.units) {
+              if (u.dead || u.team === this.team || u.isChest) continue;
+              const d = dist(h.x, h.y, u.x, u.y);
+              if (d < td) { td = d; threat = u; }
+            }
+            if (threat) { target = threat; break; }
+          }
+        }
+
+        // ③ 抢野怪 / 抢宝箱（难度越高越积极；残血 Boss 优先）
+        if (!target && Math.random() < D.bossy) {
+          let pick = null, pd = 950;
+          for (const m of game.monsters) {
+            if (m.dead) continue;
+            const d = dist(this.x, this.y, m.x, m.y);
+            const urgent = m.hp < m.maxHp * 0.45;
+            if (d < pd && (urgent || d < 620)) { pd = d; pick = m; }
+          }
+          if (pick) target = pick;
+        }
+
+        // ④ 优先回防：敌人在己方基地附近
+        if (!target) for (const u of game.units) {
+          if (u.dead || u.invuln || u.isChest || u.team === this.team) continue;
           const dOwn = dist(u.x, u.y, ownBase.x, ownBase.y);
           if (dOwn < MOBA.defendRange && dOwn < best) { best = dOwn; target = u; }
         }
@@ -343,7 +524,7 @@ class Ship {
           for (const tw of game.towers) {
             if (tw.dead || tw.team !== this.team) continue;
             for (const u of game.units) {
-              if (u.dead || u.invuln || u.team === this.team) continue;
+              if (u.dead || u.invuln || u.isChest || u.team === this.team) continue;
               const dT = dist(u.x, u.y, tw.x, tw.y);
               if (dT < 300 && dT < best) { best = dT; target = u; }
             }
@@ -356,30 +537,56 @@ class Ship {
           const nearOwn = tb && dist(this.aiTarget.x, this.aiTarget.y, tb.x, tb.y) < 340;
           if (d < 420 && !nearOwn) target = this.aiTarget;
         }
-        // 其次接战最近敌人
+        // 其次接战最近敌人（高难度更爱集火玩家；抱团倾向打英雄）
         if (!target) {
           best = Infinity;
+          const wantPlayer = this.team === 1 && Math.random() < D.focusPlayer;
           for (const u of game.units) {
-            if (u.dead || u.invuln || u.team === this.team) continue;
+            if (u.dead || u.invuln || u.isChest || u.team === this.team) continue;
             const d = dist(this.x, this.y, u.x, u.y);
-            if (d < MOBA.engageRange && d < best) { best = d; target = u; }
+            if (d > MOBA.engageRange) continue;
+            let score = d;
+            if (wantPlayer && u === game.player) score -= 220;
+            if (u.isHero && Math.random() < D.group) score -= 70;
+            if (score < best) { best = score; target = u; }
           }
         }
         // 否则推塔：优先最近的在世/破防敌塔（先一塔后二塔），塔拆完才打基地
+        // 久攻不下时（难度允许）自动换一条兵线，避免三条路僵在一处
         if (!target) {
+          this.pushT = (this.pushT || 0) + this.aiT;
           let bestT = null, bestD = Infinity;
           for (const tw of game.towers) {
             if (tw.dead || tw.invuln || tw.team === this.team) continue;
             const d = dist(this.x, this.y, tw.x, tw.y);
             if (d < bestD) { bestD = d; bestT = tw; }
           }
+          if (bestT && this.pushT > 45 && Math.random() < 0.35 + D.group * 0.4) {
+            this.pushT = 0;
+            this.lane = (this.lane + 1) % LANES.length;
+            const laneX = LANES[this.lane];
+            const alts = game.towers.filter(t => !t.dead && !t.invuln && t.team !== this.team);
+            alts.sort((a, b) => Math.abs(a.x - laneX) - Math.abs(b.x - laneX));
+            if (alts[0] && alts[0] !== bestT) bestT = alts[0];
+          }
           this.aiTarget = bestT || { x: enemyBase.x, y: enemyBase.y, base: true };
-        } else this.aiTarget = target;
+        } else { this.pushT = 0; this.aiTarget = target; }
       }
     }
 
     // 移动决策
-    if (this.retreating) {
+    let pingMove = null;
+    if (this.pingFollow && this.pingFollow.t > 0) {
+      this.pingFollow.t -= dt;
+      const d = dist(this.x, this.y, this.pingFollow.x, this.pingFollow.y);
+      if (d > 70) {
+        const a = angleTo(this.x, this.y, this.pingFollow.x, this.pingFollow.y);
+        pingMove = { x: Math.cos(a), y: Math.sin(a) };
+      } else this.pingFollow = null;
+    }
+    if (pingMove) {
+      this.aiMove = pingMove;
+    } else if (this.retreating) {
       // 朝远离当前威胁的方向退（留在战场附近，避免整局僵持）
       const src = this.aiTarget && !this.aiTarget.base ? this.aiTarget : { x: this.x, y: this.y - (this.team === 0 ? 1 : -1) };
       let nx = this.x - src.x, ny = this.y - src.y;
@@ -407,6 +614,15 @@ class Ship {
     if (this.upT <= 0) {
       this.upT = 1.1;
       this._aiGrow();
+      this._aiItems();
+    }
+
+    // AI 天赋自动选择（偏伤害/射程，血少时补耐久）
+    if (this.pendingTalent > 0) {
+      const pool = ['damage', 'range', 'reload', 'hull', 'regen', 'sail', 'booty', 'focus'];
+      const hurt = this.hp < this.maxHp * 0.55;
+      const pick = hurt ? (Math.random() < 0.5 ? 'hull' : 'regen') : pool[(Math.random() * 5) | 0];
+      this.applyTalent(pick);
     }
 
     // AI 自动用船体技能
@@ -485,6 +701,17 @@ class Ship {
     }
   }
 
+  /* AI 主动道具：先买后（血少/交战时）用 */
+  _aiItems() {
+    if (!this.items[0] && this.gold > 700) {
+      this.gold -= ITEMS.repairkit.cost;
+      this.items[0] = 'repairkit';
+      this.items[1] = 'smoke';
+    }
+    if (this.items[0] === 'repairkit' && this.hp < this.maxHp * 0.5) this.useItem(0, this.game);
+    if (this.items[1] === 'smoke' && this.hp < this.maxHp * 0.35 && this.aiTarget) this.useItem(1, this.game);
+  }
+
   _clampWorld(game) {
     this.x = clamp(this.x, 60, WORLD.w - 60);
     this.y = clamp(this.y, 90, WORLD.h - 90);
@@ -517,14 +744,21 @@ class Ship {
 
   _updateSlot(slot, idx, dt, game, rldMul) {
     const sp = this._slotWorld(idx);
-    const st = weaponStats(slot.weaponId, slot.level);
+    const st = this.stats(slot);
 
-    // 索敌：射程内最近的对立单位，否则敌方基地（无敌塔不索敌）
+    // 索敌：射程内最近的对立单位，否则敌方基地（无敌塔不索敌；烟幕中的目标不可锁定）
     let target = null, best = Infinity;
     for (const u of game.units) {
-      if (u.dead || u.invuln || u.team === this.team) continue;
+      if (u.dead || u.invuln || u.isChest || u.team === this.team || u.stealthT > 0) continue;
       const d = dist(sp.x, sp.y, u.x, u.y);
       if (d <= st.range && d < best) { best = d; target = u; }
+    }
+    // 无敌人时：可顺手打海底宝箱（不抢正常目标的索敌优先级）
+    if (!target) {
+      for (const cu of game.chestsInRange(sp.x, sp.y, st.range)) {
+        const d = dist(sp.x, sp.y, cu.x, cu.y);
+        if (d < best) { best = d; target = cu; }
+      }
     }
     const eBase = game.baseOf(1 - this.team);
     // 塔还在时基地免伤，只能打塔
@@ -541,7 +775,7 @@ class Ship {
         const facingDiff = Math.abs(normAngle(aimAngle - slot.angle));
         if (facingDiff < 0.35) {
           for (const u of game.units) {
-            if (u.dead || u.invuln || u.team === this.team) continue;
+            if (u.dead || u.invuln || u.isChest || u.team === this.team) continue;
             const d = dist(sp.x, sp.y, u.x, u.y);
             if (d <= st.range && Math.abs(normAngle(angleTo(sp.x, sp.y, u.x, u.y) - slot.angle)) <= st.cone) {
               u.hitBy(st.damage * st.rate * dt, undefined, undefined, game, this);
@@ -578,6 +812,8 @@ class Ship {
   _fire(st, idx, sp, game) {
     AudioFX[st.style === 'bullet' ? 'mgun' : 'cannon']();
     const slot = this.slots[idx];
+    // 武器熟练度：打得越多，之后升级越便宜
+    this.mastery[slot.weaponId] = (this.mastery[slot.weaponId] || 0) + 1;
     const ang = slot.angle;                        // 与炮管同向：打出去 = 炮口所指
     const tx = slot.aimX, ty = slot.aimY;
     // 各武器炮口位于炮管末端（与 _turret 画法一致）
@@ -592,7 +828,9 @@ class Ship {
       const mx = sp.x + dx * tip + px * lateral;
       const my = sp.y + dy * tip + py * lateral;
       const off = count > 1 ? (k - (count - 1) / 2) * st.spread : 0;
-      const a = ang + off;
+      // 恶劣海况：弹道抖动（雨雾风暴下手感变差）
+      const jit = Math.max(0, Weather.fx.spread - 1) * 0.13;
+      const a = ang + off + (jit > 0 ? rand(-jit, jit) : 0);
       const o = {
         x: mx, y: my, ang: a,
         style: st.style, damage: st.damage, splash: st.splash, pierce: st.pierce,
@@ -724,6 +962,25 @@ class Ship {
         ctx.fillRect(this.x - this.radius, this.y - this.radius, this.radius * 2, this.radius * 2);
         ctx.restore();
       }
+    }
+
+    // 烟幕（道具）：周身翻涌的烟团，期间敌方无法锁定
+    if (this.stealthT > 0) {
+      ctx.save();
+      ctx.globalAlpha = clamp(this.stealthT / 3.2, 0, 1) * 0.5;
+      ctx.fillStyle = '#cfd8e0';
+      for (let i = 0; i < 7; i++) {
+        const a = i * 0.95 + this.t * 0.7;
+        const rr = this.radius * (0.75 + (i % 3) * 0.28);
+        ctx.beginPath();
+        ctx.arc(this.x + Math.cos(a) * rr * 0.75, this.y + Math.sin(a) * rr * 0.65, rr * 0.55, 0, TAU);
+        ctx.fill();
+      }
+      ctx.globalAlpha = clamp(this.stealthT / 3.2, 0, 1) * 0.85;
+      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(this.x, this.y, this.radius + 16, 0, TAU); ctx.stroke();
+      ctx.restore();
     }
   }
 

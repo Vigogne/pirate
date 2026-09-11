@@ -1,0 +1,40 @@
+# 部署缓存配置 · Nginx
+# 把这段放进 server 块（或站点 conf）里即可：
+#   - index.html / version.json 永不缓存 → 玩家每次点链接都拿到最新版
+#   - js / css / assets 带 ?v= 版本戳时长期缓存（immutable），版本一变 URL 就变
+#
+# 注意：如果你的站点前面还有 CDN（Cloudflare 等），也要在 CDN 侧把
+#      index.html 与 version.json 设为 no-cache / 不缓存。
+
+server {
+    root /var/www/pirate-moba;
+    index index.html;
+
+    # 入口与版本清单：必须每次校验（no-store 更彻底）
+    location = /index.html {
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+        add_header Pragma "no-cache" always;
+        expires -1;
+    }
+    location = /version.json {
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+        expires -1;
+    }
+
+    # 带版本戳的静态资源：可以放心长期缓存
+    location ~* \.(?:js|css|png|jpg|jpeg|webp|svg|ogg|mp3|woff2?)$ {
+        expires 1y;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        access_log off;
+    }
+
+    # 兜底：其它 html 也不缓存
+    location ~* \.html?$ {
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+        expires -1;
+    }
+
+    # 可选：gzip
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+}

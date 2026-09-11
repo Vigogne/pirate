@@ -139,20 +139,40 @@ class Projectile {
 
   _damageUnit(u, game) {
     // 对建筑类（塔/基地结构）有围攻加成，避免推塔久攻不下
-    const dmg = u.isTower ? this.damage * 1.8 : this.damage;
+    // 攻城船的倍率更高（专精拆塔），英雄/塔为默认 1.8
+    const siege = (this.owner && this.owner.siegeMul) ? this.owner.siegeMul : 1.8;
+    const dmg = u.isTower ? this.damage * siege : this.damage;
     u.hitBy(dmg, this.x, this.y, game, this.owner);
-    Particles.spark(this.x, this.y, this.ang, 3, '#ffcf70');
+    // 命中分级反馈：小命中火星 / 中命中白字 / 重命中橙字 + 冲击环
+    const tier = dmg >= 60 ? 2 : (dmg >= 30 ? 1 : 0);
+    if (tier === 0) {
+      Particles.spark(this.x, this.y, this.ang, 3, '#ffcf70');
+    } else if (tier === 1) {
+      Particles.spark(this.x, this.y, this.ang, 6, '#ffe9b0');
+      game.addFloat(u.x, u.y - 26, String(Math.round(dmg)), '#ffe9b0');
+    } else {
+      Particles.spark(this.x, this.y, this.ang, 11, '#ff9d4d');
+      Particles.ring(this.x, this.y, 30, 'rgba(255,180,110,0.85)');
+      game.addFloat(u.x, u.y - 32, String(Math.round(dmg)), '#ff9d4d');
+      if (this.owner && this.owner === game.player) AudioFX.hit();
+    }
     this._awardGold(u, game);
   }
 
   _awardGold(u, game) {
-    // 斩杀赏金（英雄击杀得金，并分英雄/小兵桶）
+    // 斩杀赏金（英雄击杀得金，并分英雄/小兵桶）+ 船长经验
     if (u.dead && this.owner && this.owner.isHero && !this.owner.dead) {
-      this.owner.gold += u.money;
+      const mul = this.owner.goldBonus || 1;                 // 战利品猎人天赋
+      const gain = Math.round(u.money * mul);
+      this.owner.gold += gain;
       if (u.isHero) this.owner.killsHeroes++; else this.owner.killsMinions++;
-      game.addFloat(u.x, u.y - 24, '+' + u.money, '#ffd76a');
+      game.addFloat(u.x, u.y - 24, '+' + gain, '#ffd76a');
       AudioFX.coin();
       if (this.owner === game.player) game.playerKills++;
+      if (this.owner.addXp) {
+        const xp = u.isHero ? XP.heroKill : (u.isTower ? XP.towerKill : (u.isMonster ? XP.bossKill : XP.minionKill));
+        this.owner.addXp(xp, game);
+      }
     }
   }
 
@@ -164,18 +184,32 @@ class Projectile {
   }
 
   _impact(game, x, y) {
+    // 毒雾弹：落点留下持续伤害的毒云区域（九头蛇专属攻击）
+    if (this.poisonZone && game.addHazard) {
+      const z = this.poisonZone;
+      game.addHazard(x, y, z.r, z.dur, z.dps, this.owner);
+      Particles.explosion(x, y, z.r * 0.6, '#5aa86a', false);
+      Particles.splash(x, y, 1.2);
+      AudioFX.splash();
+      return;
+    }
     if (this.splash > 0) {
       const big = this.style === 'torpedo' || this.style === 'mortar';
       Particles.explosion(x, y, this.splash, big ? '#ff7a2a' : '#ffb15a', big);
       AudioFX.explosion(big);
       Particles.ring(x, y, this.splash);
+      // 水柱（入水/爆炸激起）
+      Particles.splash(x, y, big ? 1.8 : 1.1);
       for (const u of game.units) {
         if (u.dead || u.invuln || u.team === this.team) continue;
         if (dist(x, y, u.x, u.y) <= this.splash) {
           u.hitBy(this.damage, x, y, game, this.owner);
+          if (u.isHero) game.addFloat(u.x, u.y - 30, String(Math.round(this.damage)), '#ffb15a');
           this._awardGold(u, game);
         }
       }
+      // 镜头轻震（玩家自己打出的爆炸更明显）
+      if (this.owner === game.player) game.shake = Math.max(game.shake, big ? 0.5 : 0.28);
       for (const b of game.bases) {
         if (b.team === this.team || b.dead) continue;
         if (dist(x, y, b.x, b.y) <= this.splash + b.rad) {
