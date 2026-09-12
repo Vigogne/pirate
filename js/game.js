@@ -311,6 +311,7 @@ const Game = {
 
   _drawMines(ctx) {
     for (const mi of this.mines) {
+      if (!inView(mi.x, mi.y, 60)) continue;
       const armed = mi.t >= mi.arm;
       const blink = 0.5 + 0.5 * Math.sin(mi.t * 6 + mi.x);
       // 敌我区分：我方用队伍蓝 + 绿灯，敌方用红 + 红灯
@@ -423,6 +424,7 @@ const Game = {
 
   _drawHazards(ctx) {
     for (const h of this.hazards) {
+      if (!inView(h.x, h.y, 80)) continue;
       const k = clamp(h.t / h.max, 0, 1);
       const pulse = 0.5 + 0.5 * Math.sin(h.seed + this.time * 2.2);
       ctx.save();
@@ -644,6 +646,7 @@ const Game = {
 
   _drawChests(ctx) {
     for (const cu of this.chests) {
+      if (!inView(cu.x, cu.y, 80)) continue;
       const bob = Math.sin(cu.t * 2) * 2;
       const blink = 0.5 + 0.5 * Math.sin(cu.t * 4);
       ctx.save();
@@ -690,6 +693,7 @@ const Game = {
   /* ---- 灯塔绘制：石塔 + 旋转光柱 + 归属旗 + 占领进度环 ---- */
   _drawBeacons(ctx) {
     for (const bc of this.beacons) {
+      if (!inView(bc.x, bc.y, 260)) continue;
       const col = bc.team === 0 ? TEAM[0].color : (bc.team === 1 ? TEAM[1].color : '#9aa3ac');
       const pulse = 0.5 + 0.5 * Math.sin((bc.t || 0) * 1.6);
       ctx.save();
@@ -988,11 +992,11 @@ const Game = {
     this._drawHazards(ctx);               // 毒雾区域（九头蛇）
     Particles.draw(ctx, 'low');
     Ambient.draw(ctx, 'low');
-    for (const t of this.towers) t.draw(ctx);
-    for (const m of this.monsters) m.draw(ctx);
+    for (const t of this.towers) if (inView(t.x, t.y, 140)) t.draw(ctx);
+    for (const m of this.monsters) if (inView(m.x, m.y, 200)) m.draw(ctx);
     this._drawChests(ctx);
-    for (const m of this.minions) m.draw(ctx);
-    for (const h of this.heroes) h.draw(ctx, h === this.player);
+    for (const m of this.minions) if (inView(m.x, m.y, 120)) m.draw(ctx);
+    for (const h of this.heroes) if (inView(h.x, h.y, 160)) h.draw(ctx, h === this.player);
     Projectiles.draw(ctx);
     Ambient.draw(ctx, 'high');            // 海鸥在船之上飞过
     Particles.draw(ctx, 'high');
@@ -1158,8 +1162,12 @@ const Game = {
   },
 
   _drawMinimap(ctx) {
-    const mw = 66, mh = Math.round(mw * WORLD.h / WORLD.w);   // 约 139
-    const mx = View.w - mw - 14, my = 66;
+    // 小屏用更小的地图并整体下移，避开顶部信息条
+    const small = View.w < 900 || View.h < 480;
+    const mw = small ? 52 : 66;
+    const mh = Math.round(mw * WORLD.h / WORLD.w);
+    const topPad = small ? 74 : 66;
+    const mx = View.w - mw - (small ? 8 : 14), my = topPad;
     const sx = mw / WORLD.w, sy = mh / WORLD.h;
     this._mmRect = { mx, my, mw, mh, sx, sy };   // 供点击小地图发指令
 

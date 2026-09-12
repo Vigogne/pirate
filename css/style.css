@@ -1,5 +1,6 @@
-/* 海盗湾 · 海防塔防 — 样式 */
+﻿/* 海盗湾 · 海防塔防 — 样式 */
 :root {
+  --ui-scale: 1;
   --deep: #043a5a;
   --ink: #03101c;
   --sand: #e8cf9a;
@@ -45,67 +46,102 @@ html, body {
 
 .hidden { display: none !important; }
 
-/* ---------- HUD ---------- */
+/* ---------- HUD（分区布局：顶部信息区 / 右下操作区，互不遮挡） ---------- */
 #hud {
   position: absolute;
-  top: 14px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(96%, 1200px);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
+  inset: 0;
   pointer-events: none;
 }
-.hud-left { display: flex; gap: 14px; }
+#hud-top {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 8px);
+  left: calc(env(safe-area-inset-left, 0px) + 8px);
+  right: calc(env(safe-area-inset-right, 0px) + 8px);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: calc(8px * var(--ui-scale));
+  flex-wrap: nowrap;
+}
+.hud-left { display: flex; gap: calc(8px * var(--ui-scale)); flex-wrap: wrap; }
+.hud-eres { display: flex; gap: 6px; }
 .hud-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: calc(6px * var(--ui-scale));
   background: var(--panel);
   border: 1px solid var(--panel-line);
-  border-radius: 10px;
-  padding: 6px 12px;
-  font-size: 13px;
+  border-radius: calc(10px * var(--ui-scale));
+  padding: calc(5px * var(--ui-scale)) calc(10px * var(--ui-scale));
+  font-size: calc(13px * var(--ui-scale));
   backdrop-filter: blur(3px);
+  white-space: nowrap;
 }
 .hud-label { opacity: 0.8; }
-.bar { width: 120px; height: 12px; background: #0a2236; border-radius: 6px; overflow: hidden; }
-.bar-fill { height: 100%; width: 100%; transition: width 0.15s linear; border-radius: 6px; }
+.bar {
+  width: calc(110px * var(--ui-scale));
+  height: calc(11px * var(--ui-scale));
+  background: #0a2236;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.bar-fill { height: 100%; width: 100%; border-radius: 6px; }
 .bar-fill.base { background: linear-gradient(90deg, #ffd76a, #ff9d4d); }
 .bar-fill.ship { background: linear-gradient(90deg, #4db6e8, #56d17a); }
 .bar-fill.ebase { background: linear-gradient(90deg, #ff9d4d, #e6574d); }
-.hud-num { min-width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
+.hud-num { min-width: calc(34px * var(--ui-scale)); text-align: right; font-variant-numeric: tabular-nums; }
 
 .hud-center {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: calc(8px * var(--ui-scale));
   background: var(--panel);
   border: 1px solid var(--panel-line);
-  border-radius: 12px;
-  padding: 6px 18px;
+  border-radius: calc(12px * var(--ui-scale));
+  padding: calc(4px * var(--ui-scale)) calc(12px * var(--ui-scale));
+  font-size: calc(13px * var(--ui-scale));
+  max-width: 46%;
+  overflow: hidden;
 }
-.wave-badge { font-size: 15px; font-weight: 700; color: var(--gold); }
-.bounty { font-size: 14px; }
-.score { font-size: 13px; opacity: 0.85; }
+.wave-badge { font-size: calc(14px * var(--ui-scale)); font-weight: 700; color: var(--gold); }
+.bounty { font-size: calc(14px * var(--ui-scale)); }
+.score { font-size: calc(12.5px * var(--ui-scale)); opacity: 0.85; }
 
-.hud-right { display: flex; gap: 8px; pointer-events: auto; }
+/* 右下操作区：手机拇指可达；桌面端自动变为右上横排 */
+#hud-actions {
+  position: absolute;
+  right: calc(env(safe-area-inset-right, 0px) + 10px);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: calc(7px * var(--ui-scale));
+  width: calc(188px * var(--ui-scale));
+  max-width: 46vw;
+  pointer-events: auto;
+}
+#hud-actions .hud-btn { width: 100%; }
+#btn-skill { grid-column: span 2; }
 .hud-btn {
-  background: rgba(255, 215, 106, 0.14);
+  background: rgba(8, 30, 48, 0.86);
   border: 1px solid var(--panel-line);
   color: #ffe9b0;
-  border-radius: 8px;
-  padding: 6px 12px;
+  border-radius: calc(10px * var(--ui-scale));
+  padding: calc(8px * var(--ui-scale)) calc(6px * var(--ui-scale));
   cursor: pointer;
-  font-size: 13px;
+  font-size: calc(12.5px * var(--ui-scale));
+  line-height: 1.15;
+  text-align: center;
+  white-space: nowrap;
+  backdrop-filter: blur(3px);
   transition: background 0.15s, transform 0.1s;
+  -webkit-tap-highlight-color: transparent;
 }
-.hud-btn:hover { background: rgba(255, 215, 106, 0.3); }
+.hud-btn:hover { background: rgba(255, 215, 106, 0.28); }
 .hud-btn:active { transform: translateY(1px); }
 .hud-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .hud-btn.on { background: rgba(255, 215, 106, 0.42); border-color: var(--gold); color: #fff; }
+.skill-btn { font-size: calc(16px * var(--ui-scale)); }
+.item-btn { min-width: 0; }
 
 /* ---------- 底部船坞 ---------- */
 #dock {
@@ -435,49 +471,136 @@ html, body {
 ::-webkit-scrollbar-track { background: #0a2236; }
 ::-webkit-scrollbar-thumb { background: #2c5e82; border-radius: 5px; }
 
-/* ---------- 手机适配 ---------- */
-@media (max-width: 760px) {
-  #hud {
-    top: 6px;
+/* ---------- 手机适配：分区重排，任何分辨率都不重叠 ---------- */
+@media (max-width: 900px) {
+  /* 顶部：血条靠左、徽章靠右，整条不换行；小屏隐藏不重要的文字 */
+  #hud-top { gap: 6px; }
+  .hud-left { flex-direction: column; gap: 4px; }
+  .hud-item { padding: 3px 7px; font-size: 10.5px; border-radius: 8px; gap: 4px; }
+  .hud-item .hud-label { font-size: 10px; }
+  .bar { width: 74px; height: 8px; }
+  .hud-num { min-width: 26px; font-size: 10.5px; }
+  .hud-center { padding: 3px 8px; gap: 6px; font-size: 10.5px; max-width: none; }
+  .bounty, .score { font-size: 10.5px; }
+  .wave-badge { display: none; }              /* 手机不显示“3v3 海战”，省空间 */
+  #hud-actions { width: 168px; gap: 6px; }
+  .hud-btn { padding: 7px 5px; font-size: 11.5px; }
+  .skill-btn { font-size: 15px; }
+
+  /* 战报栏：挪到「左侧」（右侧整列让给小地图与操作区），默认折叠 */
+  #roster {
+    left: calc(env(safe-area-inset-left, 0px) + 8px);
+    right: auto;
+    top: calc(env(safe-area-inset-top, 0px) + 114px);
+    max-width: 52vw;
+  }
+  .roster-body { width: 178px; padding: 6px; max-height: 38vh; overflow: auto; }
+  .r-row { font-size: 10.5px; padding: 3px 5px; }
+  .r-kd { font-size: 10px; }
+  .roster-toggle { font-size: 11px; padding: 4px 8px; }
+
+  /* 增益徽章：顶部左侧、横向排列、限高（不压住战报栏） */
+  .buff-row {
+    top: calc(env(safe-area-inset-top, 0px) + 62px);
+    left: calc(env(safe-area-inset-left, 0px) + 8px);
+    flex-direction: row;
+    flex-wrap: wrap;
+    max-width: 46vw;
+    max-height: 42px;
+    overflow: hidden;
+  }
+  .buff-chip { font-size: 10px; padding: 1px 6px; }
+
+  /* 船坞提示：底部中央（左侧是武器面板、右侧是操作区，中间正好空出一条） */
+  #dock-hint {
+    top: auto;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: 46vw;
+    padding: 6px 10px;
     gap: 6px;
     flex-wrap: wrap;
-    padding: 0 4px;
+    justify-content: center;
   }
-  .hud-item { padding: 3px 7px; font-size: 11px; gap: 5px; }
-  .bar { width: 56px; height: 9px; }
-  .hud-num { min-width: 28px; font-size: 11px; }
-  .hud-center { padding: 3px 10px; }
-  .wave-badge { font-size: 12px; }
-  .bounty { font-size: 12px; }
-  .score { font-size: 10px; }
-  .hud-btn { padding: 4px 8px; font-size: 11px; }
+  #dock-hint .dh-text { font-size: 11px; }
+  #dock-hint .dh-btn { padding: 6px 10px; font-size: 11.5px; }
 
-  .dock-content { flex-wrap: wrap; }
-  .slots { flex-wrap: wrap; flex: 1 1 60%; }
-  .slot { min-width: 128px; min-height: 92px; padding: 6px 7px; }
-  .modules { flex: 1 1 40%; flex-wrap: wrap; }
-  .module { min-width: 118px; }
-  .cheat-row { flex-wrap: wrap; }
+  /* 装备坞：占满宽度、可滚动，双列自适应 */
+  #dock {
+    left: 4px; right: 4px; bottom: calc(env(safe-area-inset-bottom, 0px) + 6px);
+    width: auto; transform: none;
+    max-height: 78vh; overflow: auto;
+    padding: 8px 10px 10px;
+  }
+  .dock-content { flex-direction: column; gap: 10px; }
+  .slots { flex: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(126px, 1fr)); gap: 8px; }
+  .slot { min-width: 0; min-height: 84px; padding: 6px; }
+  .modules { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 8px; }
+  .module { min-width: 0; }
+  .cheat-row { flex-wrap: wrap; gap: 6px; }
 
-  /* 右侧战报栏移到小地图下方偏底（竖屏也放得下） */
-  #roster { top: 268px; right: 6px; }
-  .roster-body { width: 162px; padding: 6px; }
-  .r-row { font-size: 11px; padding: 4px 6px; }
-  .r-kd { font-size: 10px; }
+  /* 弹窗：留边、可滚动、卡片单列 */
+  .picker-panel, .itemshop-panel, .talent-panel, .settings-panel {
+    width: calc(100% - 16px) !important;
+    max-height: calc(100% - 24px);
+    padding: 12px;
+  }
+  .picker-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+  .is-cols { flex-direction: column; }
+  .talent-grid { grid-template-columns: 1fr; gap: 8px; }
+  .set-row { flex-wrap: wrap; padding: 7px 9px; gap: 6px; }
 
-  #announce { font-size: 20px; top: 30%; letter-spacing: 1px; }
-  .panel { padding: 18px 16px 20px; }
-  .panel-title { font-size: 22px; }
+  #announce { font-size: 19px; top: 26%; letter-spacing: 1px; }
+  .panel { padding: 16px 14px 18px; width: calc(100% - 20px); max-height: calc(100% - 20px); overflow: auto; }
+  .panel-title { font-size: 20px; }
   .panel-sub { font-size: 12px; }
-  .big-btn { font-size: 17px; padding: 10px 32px; }
+  .big-btn { font-size: 16px; padding: 10px 28px; }
+  #toast { font-size: 12.5px; max-width: 92vw; }
 }
 
-/* 极矮横屏（手机横握）：进一步压缩 */
+/* 极矮横屏（手机横握，高度 < 470px）：进一步压缩顶部与操作区 */
 @media (max-height: 470px) {
-  #hud { top: 4px; }
-  .hud-item { padding: 2px 6px; }
-  #roster { top: 150px; }
-  .roster-body { width: 150px; }
+  .hud-item { padding: 2px 6px; font-size: 10px; }
+  .bar { width: 62px; height: 7px; }
+  .hud-num { min-width: 22px; font-size: 10px; }
+  #hud-actions { width: 152px; gap: 5px; }
+  .hud-btn { padding: 6px 4px; font-size: 11px; border-radius: 8px; }
+  .skill-btn { font-size: 14px; }
+  #roster { top: calc(env(safe-area-inset-top, 0px) + 104px); }
+  .roster-body { width: 164px; max-height: 34vh; }
+  .buff-row { top: calc(env(safe-area-inset-top, 0px) + 56px); max-height: 36px; }
+  #dock-hint { bottom: calc(env(safe-area-inset-bottom, 0px) + 10px); max-width: 52vw; }
+}
+
+/* 窄竖屏：顶部信息条换行成两行，其余元素整体下移，保证不重叠 */
+@media (max-width: 560px) {
+  #hud-top { flex-wrap: wrap; row-gap: 5px; }
+  #hud-top .hud-left { flex-direction: row; }
+  #hud-top .hud-center { order: 3; width: 100%; justify-content: center; }
+  #hud-top .hud-eres { order: 2; }
+  .buff-row { top: calc(env(safe-area-inset-top, 0px) + 104px); max-width: 92vw; }
+  #roster { top: calc(env(safe-area-inset-top, 0px) + 152px); }
+  #dock-hint { bottom: calc(env(safe-area-inset-bottom, 0px) + 196px); max-width: 46vw; }
+  #hud-actions { width: 46vw; max-width: 200px; }
+}
+
+/* 宽屏/桌面：操作区放回右上横排（鼠标操作更顺手） */
+@media (min-width: 901px) {
+  #hud-actions {
+    top: calc(env(safe-area-inset-top, 0px) + 10px);
+    right: calc(env(safe-area-inset-right, 0px) + 12px);
+    bottom: auto;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    width: auto;
+    max-width: 52vw;
+  }
+  #hud-actions .hud-btn { width: auto; }
+  #btn-skill { grid-column: auto; }
+  .hud-center { max-width: none; }
+  .wave-badge { display: block; }
 }
 
 /* —— 武器/船体阶级徽标 —— */

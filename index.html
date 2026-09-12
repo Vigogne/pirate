@@ -7,50 +7,56 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>海盗湾 · 3v3 海战 MOBA</title>
-  <link rel="stylesheet" href="css/style.css?v=20260911-140500" />
+  <link rel="stylesheet" href="css/style.css?v=20260912-124056" />
 </head>
 <body>
   <div id="frame">
     <canvas id="game"></canvas>
 
-    <!-- HUD -->
+    <!-- HUD：顶部信息区（血条 + 状态徽章）与右下操作区分离，避免互相遮挡 -->
     <div id="hud" class="hidden">
-      <div class="hud-left">
-        <div class="hud-item" id="hud-base" title="我方基地耐久">
-          <span class="hud-label">🛡️ 我方基地</span>
-          <div class="bar"><div class="bar-fill base" id="base-bar"></div></div>
-          <span class="hud-num" id="base-num">0</span>
+      <div id="hud-top">
+        <div class="hud-left">
+          <div class="hud-item" id="hud-base" title="我方基地耐久">
+            <span class="hud-label">🛡️ 基地</span>
+            <div class="bar"><div class="bar-fill base" id="base-bar"></div></div>
+            <span class="hud-num" id="base-num">0</span>
+          </div>
+          <div class="hud-item" id="hud-ship" title="我方战舰耐久">
+            <span class="hud-label">⛵ 战舰</span>
+            <div class="bar"><div class="bar-fill ship" id="ship-bar"></div></div>
+            <span class="hud-num" id="ship-num">0</span>
+          </div>
         </div>
-        <div class="hud-item" id="hud-ship" title="舢板号耐久">
-          <span class="hud-label">⛵ 舢板号</span>
-          <div class="bar"><div class="bar-fill ship" id="ship-bar"></div></div>
-          <span class="hud-num" id="ship-num">0</span>
+
+        <div class="hud-center">
+          <div class="wave-badge" id="wave-badge">3v3 海战</div>
+          <div class="weather-chip" id="weather">☀️ 晴朗</div>
+          <div class="lvl-chip" id="lvl-chip" title="船长等级（经验来自击杀与时间）">⭐ Lv.1</div>
+          <div class="bounty" id="bounty">💰 0</div>
+          <div class="score" id="score">击杀 0 · 0:00</div>
+        </div>
+
+        <div class="hud-eres">
+          <div class="hud-item" id="hud-ebase" title="敌方基地耐久">
+            <span class="hud-label">🏴‍☠️ 敌基地</span>
+            <div class="bar"><div class="bar-fill ebase" id="ebase-bar"></div></div>
+            <span class="hud-num" id="ebase-num">0</span>
+          </div>
         </div>
       </div>
 
-      <div class="hud-center">
-        <div class="wave-badge" id="wave-badge">3v3 海战</div>
-        <div class="weather-chip" id="weather">☀️ 晴朗</div>
-        <div class="lvl-chip" id="lvl-chip" title="船长等级（经验来自击杀与时间）">⭐ Lv.1</div>
-        <div class="bounty" id="bounty">💰 0</div>
-        <div class="score" id="score">击杀 0 · 0:00</div>
-      </div>
-
-      <div class="hud-right">
-        <div class="hud-item" id="hud-ebase" title="敌方基地耐久">
-          <span class="hud-label">🏴‍☠️ 敌方基地</span>
-          <div class="bar"><div class="bar-fill ebase" id="ebase-bar"></div></div>
-          <span class="hud-num" id="ebase-num">0</span>
-        </div>
+      <!-- 右下操作区：拇指可达，网格排布，不与小地图/战报栏重叠 -->
+      <div id="hud-actions">
         <button id="btn-skill" class="hud-btn skill-btn" title="船体技能（Q）">💨</button>
         <button id="btn-item0" class="hud-btn item-btn" title="道具 1（E）">▫️</button>
         <button id="btn-item1" class="hud-btn item-btn" title="道具 2（R）">▫️</button>
         <button id="btn-open-menu" class="hud-btn" title="装备 / 升级（P）">⚙️ 装备</button>
-        <button id="btn-repair" class="hud-btn" title="修理旗舰号">🔧 修船</button>
+        <button id="btn-repair" class="hud-btn" title="修理战舰">🔧 修船</button>
         <button id="btn-range" class="hud-btn" title="显示/隐藏武器射程">🎯 射程</button>
         <button id="btn-ping" class="hud-btn" title="指令标记：右键世界 或 点小地图 发信号">📍 集合</button>
         <button id="btn-pause" class="hud-btn" title="暂停/继续（空格）">⏸ 暂停</button>
-        <button id="btn-settings" class="hud-btn" title="设置：帧数 / 声音 / 难度">⚙️ 设置</button>
+        <button id="btn-settings" class="hud-btn" title="设置：帧数 / 声音 / 难度 / 界面">⚙️ 设置</button>
       </div>
     </div>
 
@@ -103,6 +109,12 @@
             <button id="set-zoom-out" class="set-btn">🔍−</button>
             <button id="set-zoom-reset" class="set-btn">默认</button>
             <button id="set-zoom-in" class="set-btn">🔍＋</button>
+          </div>
+          <div class="set-row">
+            <span class="set-label">界面缩放<br/><span class="set-hint">手机显示不全时调小</span></span>
+            <button id="set-ui-small" class="set-btn" data-ui="0.86">小</button>
+            <button id="set-ui-normal" class="set-btn on" data-ui="1">中</button>
+            <button id="set-ui-large" class="set-btn" data-ui="1.16">大</button>
           </div>
           <div class="set-row">
             <span class="set-label">画质</span>
@@ -225,24 +237,24 @@
   </div>
 
   <!-- 渲染与逻辑（普通脚本，按依赖顺序加载；data 与代码分离便于修改） -->
-  <script src="js/version.js?v=20260911-140500"></script>
-  <script src="js/utils.js?v=20260911-140500"></script>
-  <script src="js/config.js?v=20260911-140500"></script>
-  <script src="assets/manifest.js?v=20260911-140500"></script>
-  <script src="js/assets.js?v=20260911-140500"></script>
-  <script src="js/rig.js?v=20260911-140500"></script>
-  <script src="js/audio.js?v=20260911-140500"></script>
-  <script src="js/input.js?v=20260911-140500"></script>
-  <script src="js/water.js?v=20260911-140500"></script>
-  <script src="js/map.js?v=20260911-140500"></script>
-  <script src="js/effects.js?v=20260911-140500"></script>
-  <script src="js/projectile.js?v=20260911-140500"></script>
-  <script src="js/minion.js?v=20260911-140500"></script>
-  <script src="js/monster.js?v=20260911-140500"></script>
-  <script src="js/tower.js?v=20260911-140500"></script>
-  <script src="js/ship.js?v=20260911-140500"></script>
-  <script src="js/ui.js?v=20260911-140500"></script>
-  <script src="js/game.js?v=20260911-140500"></script>
-  <script src="js/main.js?v=20260911-140500"></script>
+  <script src="js/version.js?v=20260912-124056"></script>
+  <script src="js/utils.js?v=20260912-124056"></script>
+  <script src="js/config.js?v=20260912-124056"></script>
+  <script src="assets/manifest.js?v=20260912-124056"></script>
+  <script src="js/assets.js?v=20260912-124056"></script>
+  <script src="js/rig.js?v=20260912-124056"></script>
+  <script src="js/audio.js?v=20260912-124056"></script>
+  <script src="js/input.js?v=20260912-124056"></script>
+  <script src="js/water.js?v=20260912-124056"></script>
+  <script src="js/map.js?v=20260912-124056"></script>
+  <script src="js/effects.js?v=20260912-124056"></script>
+  <script src="js/projectile.js?v=20260912-124056"></script>
+  <script src="js/minion.js?v=20260912-124056"></script>
+  <script src="js/monster.js?v=20260912-124056"></script>
+  <script src="js/tower.js?v=20260912-124056"></script>
+  <script src="js/ship.js?v=20260912-124056"></script>
+  <script src="js/ui.js?v=20260912-124056"></script>
+  <script src="js/game.js?v=20260912-124056"></script>
+  <script src="js/main.js?v=20260912-124056"></script>
 </body>
 </html>

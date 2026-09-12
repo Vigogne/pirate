@@ -11,6 +11,7 @@ const Settings = {
   zoom: 1,          // 当前视野缩放（>1 看得更近，<1 看得更远）
   zoomTarget: 1,    // 目标缩放（滚轮 / 双指 / 按钮设置，平滑逼近）
   quality: 'high',  // low | mid | high（粒子数量与水面层数）
+  autoQuality: true,     // 帧率过低时自动降一档画质
   difficulty: 'normal',   // easy | normal | hard（敌方 AI 强度）
   pingType: 'gather',     // 当前指令标记类型
 };
@@ -64,6 +65,16 @@ function hexA(hex, alpha) {
   const bigint = parseInt(c, 16);
   const r = (bigint >> 16) & 255, g = (bigint >> 8) & 255, b = bigint & 255;
   return `rgba(${r},${g},${b},${alpha})`;
+}
+
+/* 视口判定（世界坐标）：剔除屏幕外的绘制（单位/弹体/粒子/航迹）
+ * 世界 1920×4500，一屏只看得到约 1/8 —— 剔除能省下大量描边与填充 */
+function inView(x, y, pad = 90) {
+  if (typeof Game === 'undefined' || !Game.cam || typeof View === 'undefined') return true;
+  const zoom = (typeof Settings !== 'undefined' && Settings.zoom) || 1;
+  const vw = View.w / zoom, vh = View.h / zoom;
+  return x >= Game.cam.x - pad && x <= Game.cam.x + vw + pad &&
+         y >= Game.cam.y - pad && y <= Game.cam.y + vh + pad;
 }
 
 // sin 归一到 0..1

@@ -108,7 +108,9 @@ const UI = {
     if (this.els.pingBtn) this.els.pingBtn.addEventListener('click', cyclePing);
     // 难度选择（菜单 + 设置面板同步）
     this._bindDiff();
+    this._bindUiScale();
     this._syncPingUI();
+    this.applyUiScale();
     gid('picker-close').addEventListener('click', () => this.closePicker());
     this.els.picker.addEventListener('click', (e) => { if (e.target === this.els.picker) this.closePicker(); });
 
@@ -129,8 +131,14 @@ const UI = {
       const order = ['low', 'mid', 'high'];
       const next = order[(order.indexOf(Settings.quality) + 1) % order.length];
       Settings.quality = next;
+      Settings._qualityTouched = true;      // 手动选择后不再被移动端默认/自动降级覆盖
+      Settings.autoQuality = false;
       gid('set-quality').textContent = '画质：' + ({ low: '低', mid: '中', high: '高' })[next];
       gid('set-quality').classList.toggle('on', next === 'high');
+      // 立即按新画质重建画布分辨率
+      const cv = document.getElementById('game');
+      if (typeof applyDpr === 'function' && cv) { applyDpr(cv); fitCanvas(cv); }
+      UI.toast(`画质已设为「${{ low: '低', mid: '中', high: '高' }[next]}」`, 1.4);
     });
     const vol = gid('set-vol');
     vol.addEventListener('input', () => {
@@ -157,6 +165,14 @@ const UI = {
       this.els.roster.classList.toggle('collapsed');
       rot.textContent = this.els.roster.classList.contains('collapsed') ? '📋 战报 ▸' : '📋 战报 ▾';
     });
+    // 小屏默认折叠战报栏（避免遮挡战场）
+    try {
+      const small = (window.innerWidth || 1280) <= 900 || (window.innerHeight || 900) <= 520;
+      if (small) {
+        this.els.roster.classList.add('collapsed');
+        rot.textContent = '📋 战报 ▸';
+      }
+    } catch (e) { /* 忽略 */ }
   },
 
   /* --------- 右侧战报栏：各船击杀/死亡/状态/复活/经济 --------- */
@@ -193,25 +209,30 @@ const UI = {
     }
   },
 
-  _refreshRoster() {
+  /* 战报栏：4Hz 节流 + 只在内容变化时写 DOM（原来是每帧 6 行 innerHTML） */
+  _refreshRoster(force) {
+    const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    if (!force && now - (this._rosterAt || 0) < 250) return;
+    this._rosterAt = now;
     const hs = this.game.heroes || [];
     for (let i = 0; i < 6; i++) {
       const r = this.rosterRows[i];
       const h = hs[i];
       if (!r || !h) continue;
-      r.name.textContent = h.name;
-      r.kd.innerHTML = `英 <b>${h.killsHeroes}</b> · 兵 <i>${h.killsMinions}</i> · 亡 <i>${h.deaths}</i>`;
-      r.gold.textContent = '💰 ' + fmt(h.gold);
+      this._setText(r.name, h.name);
+      this._setText(r.kd, `英 ${h.killsHeroes} · 兵 ${h.killsMinions} · 亡 ${h.deaths}`);
+      this._setText(r.gold, '💰 ' + fmt(h.gold));
       if (h.dead) {
-        r.status.textContent = `💀 复活 ${Math.max(1, Math.ceil(h.respawnTimer))}s`;
-        r.status.className = 'r-status revive';
-        r.root.classList.add('dead-row');
+        this._setText(r.status, `💀 复活 ${Math.max(1, Math.ceil(h.respawnTimer))}s`);
+        if (r.status._clsName !== 'revive') { r.status._clsName = 'revive'; r.status.className = 'r-status revive'; }
+        if (r.root._dead !== true) { r.root._dead = true; r.root.classList.add('dead-row'); }
       } else {
-        r.status.textContent = '⚓ 存活';
-        r.status.className = 'r-status alive';
-        r.root.classList.remove('dead-row');
+        this._setText(r.status, '⚓ 存活');
+        if (r.status._clsName !== 'alive') { r.status._clsName = 'alive'; r.status.className = 'r-status alive'; }
+        if (r.root._dead !== false) { r.root._dead = false; r.root.classList.remove('dead-row'); }
       }
-      r.root.classList.toggle('me', h === this.game.player);
+      const me = h === this.game.player;
+      if (r.root._me !== me) { r.root._me = me; r.root.classList.toggle('me', me); }
     }
   },
 
@@ -278,61 +299,91 @@ const UI = {
     }
   },
 
+  /* ---- 只在数值真正变化时写 DOM（移动端每帧改 DOM 会触发重排） ---- */
+  _setText(el, v) {
+    if (!el) return;
+    if (el._v === v) return;
+    el._v = v;
+    el.textContent = v;
+  },
+  _setWidth(el, pct) {
+    if (!el) return;
+    const v = Math.round(pct * 2) / 2;          // 0.5% 粒度，避免亚像素抖动
+    if (el._w === v) return;
+    el._w = v;
+    el.style.width = v + '%';
+  },
+  _setCls(el, cls, on) {
+    if (!el) return;
+    const key = '_c_' + cls;
+    if (el[key] === on) return;
+    el[key] = on;
+    el.classList.toggle(cls, on);
+  },
+  _setAttr(el, attr, v) {
+    if (!el) return;
+    const key = '_a_' + attr;
+    if (el[key] === v) return;
+    el[key] = v;
+    if (attr === 'title') el.title = v;
+    else if (attr === 'disabled') el.disabled = v;
+  },
+
   refresh() {
     const g = this.game;
     if (!g.base0 || !g.player) return;
 
     const b0 = g.base0, b1 = g.base1, p = g.player;
-    this.els.baseBar.style.width = `${clamp(b0.hp / b0.maxHp * 100, 0, 100)}%`;
-    this.els.baseNum.textContent = `${Math.max(0, Math.round(b0.hp))}`;
-    this.els.ebaseBar.style.width = `${clamp(b1.hp / b1.maxHp * 100, 0, 100)}%`;
-    this.els.ebaseNum.textContent = `${Math.max(0, Math.round(b1.hp))}`;
-    this.els.shipBar.style.width = `${clamp(p.hp / p.maxHp * 100, 0, 100)}%`;
-    this.els.shipNum.textContent = p.dead ? '重生中' : `${Math.max(0, Math.round(p.hp))}/${p.maxHp}`;
+    this._setWidth(this.els.baseBar, clamp(b0.hp / b0.maxHp * 100, 0, 100));
+    this._setText(this.els.baseNum, `${Math.max(0, Math.round(b0.hp))}`);
+    this._setWidth(this.els.ebaseBar, clamp(b1.hp / b1.maxHp * 100, 0, 100));
+    this._setText(this.els.ebaseNum, `${Math.max(0, Math.round(b1.hp))}`);
+    this._setWidth(this.els.shipBar, clamp(p.hp / p.maxHp * 100, 0, 100));
+    this._setText(this.els.shipNum, p.dead ? '重生中' : `${Math.max(0, Math.round(p.hp))}/${p.maxHp}`);
 
-    this.els.bounty.textContent = '💰 ' + fmt(p.gold);
+    this._setText(this.els.bounty, '💰 ' + fmt(p.gold));
     if (this.els.lvlChip) {
       const need = xpToNext(p.level);
-      this.els.lvlChip.textContent = `⭐ Lv.${p.level}`;
-      this.els.lvlChip.title = `船长等级 ${p.level} · 经验 ${Math.floor(p.xp)}/${need}` + (p.pendingTalent > 0 ? ` · 有 ${p.pendingTalent} 个天赋待选（点击）` : '');
-      this.els.lvlChip.classList.toggle('ready', p.pendingTalent > 0);
+      this._setText(this.els.lvlChip, `⭐ Lv.${p.level}`);
+      this._setAttr(this.els.lvlChip, 'title',
+        `船长等级 ${p.level} · 经验 ${Math.floor(p.xp)}/${need}` + (p.pendingTalent > 0 ? ` · 有 ${p.pendingTalent} 个天赋待选（点击）` : ''));
+      this._setCls(this.els.lvlChip, 'ready', p.pendingTalent > 0);
     }
     this._refreshItems();
     this._refreshBuffs();
     const mm = Math.floor(g.time / 60), ss = String(Math.floor(g.time % 60)).padStart(2, '0');
-    this.els.score.textContent = `击杀 ${g.playerKills} · ${mm}:${ss}`;
-    this.els.wave.textContent = '3v3 海战';
+    this._setText(this.els.score, `击杀 ${g.playerKills} · ${mm}:${ss}`);
+    this._setText(this.els.wave, '3v3 海战');
     if (this.els.weather && typeof Weather !== 'undefined') {
       const wi = Weather.info();
-      this.els.weather.textContent = `${wi.icon} ${wi.name}`;
-      this.els.weather.className = 'weather-chip w-' + Weather.type;
+      this._setText(this.els.weather, `${wi.icon} ${wi.name}`);
+      const cls = 'weather-chip w-' + Weather.type;
+      if (this.els.weather._cls !== cls) { this.els.weather._cls = cls; this.els.weather.className = cls; }
     }
 
-    // 修船冷却
+    // 修船冷却（只在秒数变化时更新）
     if (this.els.repairBtn) {
-      if (g.repairCD > 0) {
-        this.els.repairBtn.disabled = true;
-        this.els.repairBtn.textContent = `🔧 ${Math.ceil(g.repairCD)}s`;
-      } else {
-        this.els.repairBtn.disabled = false;
-        this.els.repairBtn.textContent = '🔧 修船';
-      }
+      const txt = g.repairCD > 0 ? `🔧 ${Math.ceil(g.repairCD)}s` : '🔧 修船';
+      this._setText(this.els.repairBtn, txt);
+      this._setAttr(this.els.repairBtn, 'disabled', g.repairCD > 0);
     }
 
     // 船体技能按钮
     if (this.els.skillBtn) {
       const sk = p.hullDef && p.hullDef.skill;
-      if (!sk) { this.els.skillBtn.disabled = true; this.els.skillBtn.textContent = '—'; }
-      else if (p.skillCd > 0) {
-        this.els.skillBtn.disabled = true;
-        this.els.skillBtn.textContent = `${sk.icon}${Math.ceil(p.skillCd)}s`;
-        this.els.skillBtn.classList.remove('on');
-      } else {
-        this.els.skillBtn.disabled = false;
-        this.els.skillBtn.textContent = p.skillT > 0 ? `${sk.icon} 生效` : sk.icon;
-        this.els.skillBtn.classList.toggle('on', p.skillT > 0);
+      if (!sk) { this._setText(this.els.skillBtn, '—'); this._setAttr(this.els.skillBtn, 'disabled', true); }
+      else {
+        if (p.skillCd > 0) {
+          this._setText(this.els.skillBtn, `${sk.icon}${Math.ceil(p.skillCd)}s`);
+          this._setAttr(this.els.skillBtn, 'disabled', true);
+          this._setCls(this.els.skillBtn, 'on', false);
+        } else {
+          this._setText(this.els.skillBtn, p.skillT > 0 ? `${sk.icon} 生效` : sk.icon);
+          this._setAttr(this.els.skillBtn, 'disabled', false);
+          this._setCls(this.els.skillBtn, 'on', p.skillT > 0);
+        }
+        this._setAttr(this.els.skillBtn, 'title', `技能：${sk.name}（${sk.desc}）· 冷却 ${sk.cd}s · 按 Q`);
       }
-      this.els.skillBtn.title = `技能：${sk.name}（${sk.desc}）· 冷却 ${sk.cd}s · 按 Q`;
     }
 
     this._refreshRoster();
@@ -442,11 +493,16 @@ const UI = {
       if (!b) continue;
       const id = p.items[i];
       const cd = p.itemCd[i];
-      if (!id) { b.textContent = '▫️'; b.disabled = true; b.title = `道具栏 ${i + 1} 为空（船坞里购买）`; continue; }
+      if (!id) {
+        this._setText(b, '▫️');
+        this._setAttr(b, 'disabled', true);
+        this._setAttr(b, 'title', `道具栏 ${i + 1} 为空（船坞里购买）`);
+        continue;
+      }
       const def = ITEMS[id];
-      b.disabled = cd > 0;
-      b.textContent = cd > 0 ? `${def.icon}${Math.ceil(cd)}s` : def.icon;
-      b.title = `${def.name}（${i === 0 ? 'E' : 'R'}）：${def.desc}`;
+      this._setAttr(b, 'disabled', cd > 0);
+      this._setText(b, cd > 0 ? `${def.icon}${Math.ceil(cd)}s` : def.icon);
+      this._setAttr(b, 'title', `${def.name}（${i === 0 ? 'E' : 'R'}）：${def.desc}`);
     }
     const node = this.moduleNodes.items;
     if (node) {
@@ -454,7 +510,7 @@ const UI = {
         const id = p.items[i];
         return id ? `${ITEMS[id].icon} ${ITEMS[id].name}` : '空';
       }).join(' · ');
-      node.stat.textContent = desc;
+      this._setText(node.stat, desc);
     }
     if (this.layers.itemshop) this._refreshItemShop();
   },
@@ -628,6 +684,30 @@ const UI = {
   _syncDiffUI() {
     for (const b of (this._diffBtns || [])) {
       b.classList.toggle('on', b.dataset.diff === Settings.difficulty);
+    }
+  },
+
+  /* --------- 界面缩放（手机显示不全时调小） --------- */
+  _bindUiScale() {
+    this._uiBtns = [];
+    const list = (typeof document !== 'undefined' && document.querySelectorAll)
+      ? document.querySelectorAll('[data-ui]') : [];
+    for (const b of (list || [])) {
+      b.addEventListener('click', () => {
+        Settings.uiScale = Number(b.dataset.ui) || 1;
+        Settings._uiScaleTouched = true;
+        this.applyUiScale();
+        UI.toast(`界面缩放：${b.textContent}`, 1.2);
+      });
+      this._uiBtns.push(b);
+    }
+  },
+  applyUiScale() {
+    const v = Settings.uiScale || 1;
+    if (typeof document === 'undefined' || !document.documentElement) return;
+    document.documentElement.style.setProperty('--ui-scale', String(v));
+    for (const b of (this._uiBtns || [])) {
+      b.classList.toggle('on', Math.abs((Number(b.dataset.ui) || 1) - v) < 0.001);
     }
   },
   _syncPingUI() {

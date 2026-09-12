@@ -22,9 +22,34 @@ function computeView() {
   View.h = h;
 }
 
+/* 是否移动端（决定默认画质与像素比上限：手机 GPU 填充率有限） */
+function isMobileDevice() {
+  try {
+    if (typeof navigator === 'undefined') return false;
+    const ua = navigator.userAgent || '';
+    if (/Android|iPhone|iPad|iPod|Mobile|HarmonyOS/i.test(ua)) return true;
+    if (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches) return true;
+  } catch (e) { /* 忽略 */ }
+  return false;
+}
+
+/* 像素比上限：低 1 / 中 1.5 / 高 2；移动端再降一档换帧率 */
+function dprCap() {
+  const q = Settings.quality || 'high';
+  let cap = q === 'low' ? 1 : (q === 'mid' ? 1.5 : 2);
+  if (isMobileDevice()) cap = Math.min(cap, q === 'high' ? 1.5 : cap);
+  return cap;
+}
+
 function boot() {
   const canvas = document.getElementById('game');
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  // 移动端默认中画质（设置里可手动调回高）
+  if (isMobileDevice() && !Settings._qualityTouched) Settings.quality = 'mid';
+  // 屏幕很矮（手机横握）时默认缩小界面，避免 UI 显示不全
+  if (typeof window !== 'undefined' && window.innerHeight && window.innerHeight < 460 && !Settings._uiScaleTouched) {
+    Settings.uiScale = 0.88;
+  }
+  const dpr = Math.min(window.devicePixelRatio || 1, dprCap());
   Render.dpr = dpr;
   computeView();
   Render.W = View.w;
@@ -99,13 +124,23 @@ async function checkVersion(verbose) {
 
 function onResize(canvas) {
   computeView();
-  const dpr = Render.dpr;
-  canvas.width = Math.round(View.w * dpr);
-  canvas.height = Math.round(View.h * dpr);
-  Render.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  applyDpr(canvas);
   Render.W = View.w;
   Render.H = View.h;
   fitCanvas(canvas);
+}
+
+/* 按当前画质/设备重算像素比并重建画布尺寸（切画质时调用） */
+function applyDpr(canvas) {
+  const dpr = Math.min(window.devicePixelRatio || 1, dprCap());
+  Render.dpr = dpr;
+  canvas.width = Math.round(View.w * dpr);
+  canvas.height = Math.round(View.h * dpr);
+  Render.ctx = canvas.getContext('2d');
+  Render.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // 分辨率/上下文变化后这些缓存要失效
+  if (typeof Water !== 'undefined') { Water._grad = null; Water._fogGrad = null; }
+  if (typeof Map !== 'undefined' && Map.cache) { /* 地形缓存与分辨率无关，保留 */ }
 }
 
 function fitCanvas(canvas) {
@@ -133,22 +168,47 @@ function loop(ts) {
   Game.update(dt);
   Game.render();
   drawFps();
+  autoQuality(dt);
   Input.frameEnd();
 
   requestAnimationFrame(loop);
 }
 
-/* 帧数显示（设置面板开关） */
+/* 帧率自愈：连续低于阈值就自动降一档画质（只降不升，避免来回抖动） */
+let _lowT = 0, _autoNotified = false;
+function autoQuality(dt) {
+  if (!Settings.autoQuality) return;
+  if (_fps < 42) _lowT += dt; else _lowT = Math.max(0, _lowT - dt * 0.5);
+  if (_lowT < 2.5) return;
+  _lowT = 0;
+  const order = ['low', 'mid', 'high'];
+  const i = order.indexOf(Settings.quality || 'high');
+  if (i <= 0) return;
+  Settings.quality = order[i - 1];
+  const canvas = document.getElementById('game');
+  if (canvas) { applyDpr(canvas); fitCanvas(canvas); }
+  if (typeof UI !== 'undefined' && UI.toast && !_autoNotified) {
+    _autoNotified = true;
+    UI.toast(`📉 帧率偏低，画质已自动降为「${{ low: '低', mid: '中', high: '高' }[Settings.quality]}」（设置里可改回）`, 2.6);
+  }
+  console.log('[性能] 自动降画质 →', Settings.quality, 'fps', Math.round(_fps));
+}
+
+/* 帧数显示（设置面板开关）：画在小地图下方，避开 DOM 顶部信息条 */
 function drawFps() {
   if (!Settings.showFps) return;
   const ctx = Render.ctx;
+  const r = (typeof Game !== 'undefined' && Game._mmRect) ? Game._mmRect : null;
+  const x = 10;
+  const y = r ? r.my + r.mh + 18 : 74;
   ctx.save();
   ctx.font = 'bold 13px monospace';
   ctx.textAlign = 'left';
+  const txt = `FPS ${Math.round(_fps)}`;
   ctx.fillStyle = 'rgba(0,0,0,0.55)';
-  ctx.fillText(`FPS ${Math.round(_fps)}`, 11, 21);
+  ctx.fillText(txt, x + 1, y + 1);
   ctx.fillStyle = _fps >= 50 ? '#8fe8a0' : (_fps >= 30 ? '#ffd76a' : '#ff8b6a');
-  ctx.fillText(`FPS ${Math.round(_fps)}`, 10, 20);
+  ctx.fillText(txt, x, y);
   ctx.restore();
 }
 

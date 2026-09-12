@@ -25,12 +25,29 @@ class WakeTrail {
       if (this.pts[i].life <= 0) this.pts.splice(i, 1);
     }
   }
-  /* 分桶批量描边：同一寿命区间的段合并成一条 path → 描边次数从 n*3 降到 ≤8 */
+  /* 分桶批量描边（含屏外剔除，桶数与 V 边线随画质降级） */
   draw(ctx) {
     const pts = this.pts, n = pts.length;
     if (n < 2) return;
     const q = Settings.quality || 'high';
-    const B = q === 'low' ? 2 : (q === 'mid' ? 3 : 4);
+    if (q === 'low') {
+      // 低画质：单桶、单条主线，最省
+      ctx.save();
+      ctx.lineCap = 'round';
+      ctx.globalAlpha = 0.28;
+      ctx.strokeStyle = '#eefdff';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      for (let i = n - 1; i >= 1; i--) {
+        const pN = pts[i], pO = pts[i - 1];
+        if (!inView(pN.x, pN.y, 60)) continue;
+        ctx.moveTo(pO.x, pO.y); ctx.lineTo(pN.x, pN.y);
+      }
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
+    const B = q === 'mid' ? 2 : 3;
     ctx.save();
     ctx.lineCap = 'round';
     for (let b = 0; b < B; b++) {
@@ -40,7 +57,6 @@ class WakeTrail {
       const alpha = Math.pow(midLife, 1.7) * 0.42;
       if (alpha < 0.02) continue;
       const w = 2 + age * 6.5;
-      // 主沫带（一条 path）
       let any = false;
       ctx.globalAlpha = alpha;
       ctx.strokeStyle = '#eefdff';
@@ -49,12 +65,13 @@ class WakeTrail {
       for (let i = n - 1; i >= 1; i--) {
         const pN = pts[i];
         if (pN.life > lifeHi || pN.life <= lifeLo) continue;
+        if (!inView(pN.x, pN.y, 60)) continue;
         const pO = pts[i - 1];
         ctx.moveTo(pO.x, pO.y); ctx.lineTo(pN.x, pN.y);
         any = true;
       }
       if (any) ctx.stroke();
-      // 两侧 V 形边线（一条 path 两条线）
+      // 两侧 V 形边线（中画质只画一条）
       let anyV = false;
       ctx.globalAlpha = alpha * 0.7;
       ctx.lineWidth = Math.max(1, w * 0.45);
@@ -62,13 +79,15 @@ class WakeTrail {
       for (let i = n - 1; i >= 1; i--) {
         const pN = pts[i];
         if (pN.life > lifeHi || pN.life <= lifeLo) continue;
+        if (!inView(pN.x, pN.y, 60)) continue;
         const pO = pts[i - 1];
         const dx = pN.x - pO.x, dy = pN.y - pO.y;
         const L = Math.hypot(dx, dy) || 1;
         const lx = -dy / L, ly = dx / L;
         const s = pN.s;
         const o = age * age * (12 + 18 * s) * s;
-        for (const side of [-1, 1]) {
+        const sides = q === 'mid' ? [1] : [-1, 1];
+        for (const side of sides) {
           ctx.moveTo(pO.x + lx * o * side, pO.y + ly * o * side);
           ctx.lineTo(pN.x + lx * o * side, pN.y + ly * o * side);
         }
@@ -338,6 +357,7 @@ const Particles = {
     ctx.save();
     for (const p of this.list) {
       if (p.layer !== layer) continue;
+      if (!inView(p.x, p.y, (p.size || 4) + 40)) continue;   // 屏外粒子不绘制
       const a = clamp(p.life / p.max, 0, 1);
       switch (p.type) {
         case 'smoke':
